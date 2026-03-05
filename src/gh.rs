@@ -3,12 +3,28 @@ use serde_json::Value;
 use std::process::Command;
 
 /// Run a GraphQL query via `gh api graphql` and return the parsed JSON.
+///
+/// Passes the full request body via stdin to handle complex variable types
+/// (arrays, nested objects) that `gh api graphql -f/-F` can't express.
 pub fn graphql(query: &str, variables: Value) -> Result<Value> {
-    let vars = variables.to_string();
+    let body = serde_json::json!({
+        "query": query,
+        "variables": variables,
+    });
+
     let output = Command::new("gh")
-        .args(["api", "graphql", "-f", &format!("query={query}"), "-f", &format!("variables={vars}")])
-        .output()
-        .context("Failed to run `gh api graphql`. Is gh installed and authenticated?")?;
+        .args(["api", "graphql", "--input", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("Failed to run `gh api graphql`. Is gh installed and authenticated?")
+        .and_then(|mut child| {
+            if let Some(ref mut stdin) = child.stdin {
+                serde_json::to_writer(stdin, &body).context("Failed to write to gh stdin")?;
+            }
+            child.wait_with_output().context("Failed to wait for gh")
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

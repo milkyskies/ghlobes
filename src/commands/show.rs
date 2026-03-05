@@ -9,7 +9,7 @@ pub fn run(number: u64) -> Result<()> {
     let (config, _) = find_config()?;
 
     let query = r#"
-        query($owner: String!, $repo: String!, $number: Int!, $projectNumber: Int!) {
+        query($owner: String!, $repo: String!, $number: Int!) {
             repository(owner: $owner, name: $repo) {
                 issue(number: $number) {
                     number title body state
@@ -17,7 +17,8 @@ pub fn run(number: u64) -> Result<()> {
                     author { login }
                     assignees(first: 5) { nodes { login } }
                     labels(first: 10) { nodes { name color } }
-                    trackedInIssues(first: 5) { nodes { number title state } }
+                    blockedBy(first: 10) { nodes { number title state } }
+                    blocking(first: 10) { nodes { number title state } }
                     projectItems(first: 5) {
                         nodes {
                             project { number }
@@ -40,7 +41,6 @@ pub fn run(number: u64) -> Result<()> {
         "owner": config.owner,
         "repo": config.repo,
         "number": number,
-        "projectNumber": config.project_number,
     }))?;
 
     let issue = &data["repository"]["issue"];
@@ -102,6 +102,27 @@ pub fn run(number: u64) -> Result<()> {
                     println!("Priority: {colored}");
                 }
             }
+        }
+    }
+
+    // Dependencies
+    let blocked_by = issue["blockedBy"]["nodes"].as_array().cloned().unwrap_or_default();
+    let blocking = issue["blocking"]["nodes"].as_array().cloned().unwrap_or_default();
+
+    if !blocked_by.is_empty() {
+        println!("{}", "Blocked by:".yellow());
+        for dep in &blocked_by {
+            let state = dep["state"].as_str().unwrap_or("?");
+            let icon = if state == "OPEN" { "●".red() } else { "●".green() };
+            println!("  {} #{} {}", icon, dep["number"], dep["title"].as_str().unwrap_or("?"));
+        }
+    }
+    if !blocking.is_empty() {
+        println!("{}", "Blocking:".dimmed());
+        for dep in &blocking {
+            let state = dep["state"].as_str().unwrap_or("?");
+            let icon = if state == "OPEN" { "●".yellow() } else { "●".green() };
+            println!("  {} #{} {}", icon, dep["number"], dep["title"].as_str().unwrap_or("?"));
         }
     }
 

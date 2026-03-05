@@ -16,7 +16,7 @@ pub fn run() -> Result<()> {
                     nodes {
                         number title
                         assignees(first: 3) { nodes { login } }
-                        blockedByIssues(first: 10) {
+                        blockedBy(first: 10) {
                             nodes { number title state }
                         }
                     }
@@ -39,7 +39,7 @@ pub fn run() -> Result<()> {
         let nodes = issues_node["nodes"].as_array().cloned().unwrap_or_default();
 
         for issue in nodes {
-            let open_blockers: Vec<_> = issue["blockedByIssues"]["nodes"]
+            let open_blockers: Vec<_> = issue["blockedBy"]["nodes"]
                 .as_array()
                 .map(|blockers| {
                     blockers

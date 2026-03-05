@@ -10,22 +10,20 @@ pub fn add(issue: u64, blocked_by: u64) -> Result<()> {
     let (issue_id, blocker_id) = get_issue_ids(&config, issue, blocked_by)?;
 
     let mutation = r#"
-        mutation($issueId: ID!, $blockerId: ID!) {
-            issueCreateBlockedByRelation(input: { issueId: $issueId, blockedByIssueId: $blockerId }) {
-                issue { number title }
-                blockingIssue { number title }
+        mutation($issueId: ID!, $blockingIssueId: ID!) {
+            addBlockedBy(input: { issueId: $issueId, blockingIssueId: $blockingIssueId }) {
+                issue { number }
+                blockingIssue { number }
             }
         }
     "#;
 
-    let data = graphql(mutation, json!({
+    graphql(mutation, json!({
         "issueId": issue_id,
-        "blockerId": blocker_id,
+        "blockingIssueId": blocker_id,
     }))?;
 
-    let issue_num = data["issueCreateBlockedByRelation"]["issue"]["number"].as_u64().unwrap_or(issue);
-    let blocker_num = data["issueCreateBlockedByRelation"]["blockingIssue"]["number"].as_u64().unwrap_or(blocked_by);
-    println!("{} #{issue_num} is now blocked by #{blocker_num}", "✓".green());
+    println!("{} #{issue} is now blocked by #{blocked_by}", "✓".green());
 
     Ok(())
 }
@@ -35,16 +33,16 @@ pub fn remove(issue: u64, blocked_by: u64) -> Result<()> {
     let (issue_id, blocker_id) = get_issue_ids(&config, issue, blocked_by)?;
 
     let mutation = r#"
-        mutation($issueId: ID!, $blockerId: ID!) {
-            issueRemoveBlockedByRelation(input: { issueId: $issueId, blockedByIssueId: $blockerId }) {
-                issue { number title }
+        mutation($issueId: ID!, $blockingIssueId: ID!) {
+            removeBlockedBy(input: { issueId: $issueId, blockingIssueId: $blockingIssueId }) {
+                issue { number }
             }
         }
     "#;
 
     graphql(mutation, json!({
         "issueId": issue_id,
-        "blockerId": blocker_id,
+        "blockingIssueId": blocker_id,
     }))?;
 
     println!("{} Removed: #{issue} no longer blocked by #{blocked_by}", "✓".green());
@@ -59,10 +57,10 @@ pub fn list(issue: u64) -> Result<()> {
             repository(owner: $owner, name: $repo) {
                 issue(number: $number) {
                     number title
-                    blockedByIssues(first: 20) {
+                    blockedBy(first: 20) {
                         nodes { number title state }
                     }
-                    blockingIssues(first: 20) {
+                    blocking(first: 20) {
                         nodes { number title state }
                     }
                 }
@@ -83,8 +81,8 @@ pub fn list(issue: u64) -> Result<()> {
 
     println!("#{issue} — {}", iss["title"].as_str().unwrap_or("?").bold());
 
-    let blocked_by = iss["blockedByIssues"]["nodes"].as_array().cloned().unwrap_or_default();
-    let blocking = iss["blockingIssues"]["nodes"].as_array().cloned().unwrap_or_default();
+    let blocked_by = iss["blockedBy"]["nodes"].as_array().cloned().unwrap_or_default();
+    let blocking = iss["blocking"]["nodes"].as_array().cloned().unwrap_or_default();
 
     if blocked_by.is_empty() && blocking.is_empty() {
         println!("  No dependencies.");

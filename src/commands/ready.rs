@@ -20,7 +20,7 @@ pub fn run() -> Result<()> {
                                 ... on Issue {
                                     number title state
                                     assignees(first: 3) { nodes { login } }
-                                    blockedByIssues(first: 5) {
+                                    blockedBy(first: 5) {
                                         nodes { state }
                                     }
                                 }
@@ -72,12 +72,12 @@ pub fn run() -> Result<()> {
                 }
             }
 
-            if item_status.eq_ignore_ascii_case("in_progress") {
+            if item_status.eq_ignore_ascii_case("in progress") {
                 continue;
             }
 
             // Check blockers
-            let has_open_blocker = content["blockedByIssues"]["nodes"]
+            let has_open_blocker = content["blockedBy"]["nodes"]
                 .as_array()
                 .map(|blockers| blockers.iter().any(|b| b["state"].as_str() == Some("OPEN")))
                 .unwrap_or(false);

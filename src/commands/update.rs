@@ -14,8 +14,8 @@ pub fn run(
 ) -> Result<()> {
     let (config, _) = find_config()?;
 
-    // --claim is shorthand for --status in_progress
-    let status = if claim { Some("in_progress".to_string()) } else { status };
+    // --claim is shorthand for --status "In Progress"
+    let status = if claim { Some("In Progress".to_string()) } else { status };
 
     if status.is_none() && priority.is_none() && assignee.is_none() {
         anyhow::bail!("Specify at least one of --status, --priority, --assignee, or --claim");
@@ -23,7 +23,7 @@ pub fn run(
 
     // Get the project item ID for this issue
     let query = r#"
-        query($owner: String!, $repo: String!, $number: Int!, $projectNumber: Int!) {
+        query($owner: String!, $repo: String!, $number: Int!) {
             repository(owner: $owner, name: $repo) {
                 issue(number: $number) {
                     id
@@ -42,7 +42,6 @@ pub fn run(
         "owner": config.owner,
         "repo": config.repo,
         "number": number,
-        "projectNumber": config.project_number,
     }))?;
 
     let issue = &data["repository"]["issue"];

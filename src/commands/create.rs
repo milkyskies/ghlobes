@@ -25,11 +25,8 @@ pub fn run(
         args.extend(["--title", &title_str]);
     }
 
-    let body_str;
-    if let Some(ref b) = body {
-        body_str = b.clone();
-        args.extend(["--body", &body_str]);
-    }
+    let body_str = body.unwrap_or_default();
+    args.extend(["--body", &body_str]);
 
     let label_args: Vec<String> = label.iter().flat_map(|l| vec!["--label".to_string(), l.clone()]).collect();
     let label_refs: Vec<&str> = label_args.iter().map(String::as_str).collect();

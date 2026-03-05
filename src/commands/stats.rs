@@ -16,7 +16,7 @@ pub fn run() -> Result<()> {
                 issues(first: 50, after: $cursor, states: OPEN) {
                     pageInfo { hasNextPage endCursor }
                     nodes {
-                        blockedByIssues(first: 1) {
+                        blockedBy(first: 1) {
                             nodes { state }
                         }
                     }
@@ -46,7 +46,7 @@ pub fn run() -> Result<()> {
 
         let issues_node = &data["repository"]["issues"];
         for issue in issues_node["nodes"].as_array().unwrap_or(&vec![]) {
-            let has_open_blocker = issue["blockedByIssues"]["nodes"]
+            let has_open_blocker = issue["blockedBy"]["nodes"]
                 .as_array()
                 .map(|b| b.iter().any(|x| x["state"].as_str() == Some("OPEN")))
                 .unwrap_or(false);

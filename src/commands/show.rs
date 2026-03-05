@@ -17,16 +17,22 @@ pub fn run(number: u64) -> Result<()> {
                     author { login }
                     assignees(first: 5) { nodes { login } }
                     labels(first: 10) { nodes { name color } }
+                    parent { number title state }
+                    subIssues(first: 100) { nodes { number title state } }
                     blockedBy(first: 10) { nodes { number title state } }
                     blocking(first: 10) { nodes { number title state } }
                     projectItems(first: 5) {
                         nodes {
                             project { number }
-                            fieldValues(first: 10) {
+                            fieldValues(first: 15) {
                                 nodes {
                                     ... on ProjectV2ItemFieldSingleSelectValue {
                                         name
                                         field { ... on ProjectV2SingleSelectField { name } }
+                                    }
+                                    ... on ProjectV2ItemFieldNumberValue {
+                                        number
+                                        field { ... on ProjectV2Field { name } }
                                     }
                                 }
                             }
@@ -37,11 +43,14 @@ pub fn run(number: u64) -> Result<()> {
         }
     "#;
 
-    let data = graphql(query, json!({
-        "owner": config.owner,
-        "repo": config.repo,
-        "number": number,
-    }))?;
+    let data = graphql(
+        query,
+        json!({
+            "owner": config.owner,
+            "repo": config.repo,
+            "number": number,
+        }),
+    )?;
 
     let issue = &data["repository"]["issue"];
     if issue.is_null() {
@@ -79,6 +88,51 @@ pub fn run(number: u64) -> Result<()> {
         println!("Labels:   {}", labels.join(", "));
     }
 
+    // Parent issue
+    if !issue["parent"].is_null() {
+        let p = &issue["parent"];
+        let pstate = p["state"].as_str().unwrap_or("?");
+        let icon = if pstate == "OPEN" {
+            "○".yellow()
+        } else {
+            "✓".green()
+        };
+        println!(
+            "Parent:   {} #{} {}",
+            icon,
+            p["number"],
+            p["title"].as_str().unwrap_or("?")
+        );
+    }
+
+    // Sub-issues
+    let subs = issue["subIssues"]["nodes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if !subs.is_empty() {
+        let total = subs.len();
+        let done = subs
+            .iter()
+            .filter(|s| s["state"].as_str() == Some("CLOSED"))
+            .count();
+        println!("{}", format!("Sub-issues ({done}/{total}):").cyan());
+        for sub in &subs {
+            let state = sub["state"].as_str().unwrap_or("?");
+            let icon = if state == "OPEN" {
+                "○".yellow()
+            } else {
+                "✓".green()
+            };
+            println!(
+                "  {} #{} {}",
+                icon,
+                sub["number"],
+                sub["title"].as_str().unwrap_or("?")
+            );
+        }
+    }
+
     // Project fields (status, priority) from the matching project
     let project_items = issue["projectItems"]["nodes"].as_array();
     if let Some(items) = project_items {
@@ -89,10 +143,11 @@ pub fn run(number: u64) -> Result<()> {
             }
             for fv in item["fieldValues"]["nodes"].as_array().unwrap_or(&vec![]) {
                 let field_name = fv["field"]["name"].as_str().unwrap_or("");
-                let value = fv["name"].as_str().unwrap_or("");
                 if field_name.eq_ignore_ascii_case("status") {
+                    let value = fv["name"].as_str().unwrap_or("");
                     println!("Status:   {}", value.cyan());
                 } else if field_name.eq_ignore_ascii_case("priority") {
+                    let value = fv["name"].as_str().unwrap_or("");
                     let colored = match value {
                         "P0" => value.red().bold().to_string(),
                         "P1" => value.red().to_string(),
@@ -100,29 +155,62 @@ pub fn run(number: u64) -> Result<()> {
                         _ => value.dimmed().to_string(),
                     };
                     println!("Priority: {colored}");
+                } else if field_name.eq_ignore_ascii_case("points") {
+                    if let Some(n) = fv["number"].as_f64() {
+                        let display = if n.fract() == 0.0 {
+                            format!("{}", n as i64)
+                        } else {
+                            format!("{n}")
+                        };
+                        println!("Points:   {}", display.bold());
+                    }
                 }
             }
         }
     }
 
     // Dependencies
-    let blocked_by = issue["blockedBy"]["nodes"].as_array().cloned().unwrap_or_default();
-    let blocking = issue["blocking"]["nodes"].as_array().cloned().unwrap_or_default();
+    let blocked_by = issue["blockedBy"]["nodes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let blocking = issue["blocking"]["nodes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     if !blocked_by.is_empty() {
         println!("{}", "Blocked by:".yellow());
         for dep in &blocked_by {
             let state = dep["state"].as_str().unwrap_or("?");
-            let icon = if state == "OPEN" { "●".red() } else { "●".green() };
-            println!("  {} #{} {}", icon, dep["number"], dep["title"].as_str().unwrap_or("?"));
+            let icon = if state == "OPEN" {
+                "●".red()
+            } else {
+                "●".green()
+            };
+            println!(
+                "  {} #{} {}",
+                icon,
+                dep["number"],
+                dep["title"].as_str().unwrap_or("?")
+            );
         }
     }
     if !blocking.is_empty() {
         println!("{}", "Blocking:".dimmed());
         for dep in &blocking {
             let state = dep["state"].as_str().unwrap_or("?");
-            let icon = if state == "OPEN" { "●".yellow() } else { "●".green() };
-            println!("  {} #{} {}", icon, dep["number"], dep["title"].as_str().unwrap_or("?"));
+            let icon = if state == "OPEN" {
+                "●".yellow()
+            } else {
+                "●".green()
+            };
+            println!(
+                "  {} #{} {}",
+                icon,
+                dep["number"],
+                dep["title"].as_str().unwrap_or("?")
+            );
         }
     }
 

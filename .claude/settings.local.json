@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh:*)",
+      "Bash(git push:*)",
+      "Bash(cargo install:*)",
+      "Bash(ghlobes stats:*)",
+      "Bash(ghlobes ready:*)",
+      "Bash(glb stats:*)",
+      "Bash(glb create:*)",
+      "Bash(glb dep:*)",
+      "Bash(glb ready:*)",
+      "WebFetch(domain:github.com)",
+      "mcp__plugin_beads_beads__get_tool_info",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(glb update:*)",
+      "WebFetch(domain:github.blog)",
+      "WebFetch(domain:docs.github.com)",
+      "Bash(glb init:*)",
+      "Bash(./target/debug/ghlobes init:*)",
+      "Bash(glb close:*)"
+    ]
+  }
+}

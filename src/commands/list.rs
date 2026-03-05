@@ -5,7 +5,11 @@ use serde_json::json;
 use crate::config::find_config;
 use crate::gh::graphql;
 
-pub fn run(status: Option<String>, priority: Option<String>, assignee: Option<String>) -> Result<()> {
+pub fn run(
+    status: Option<String>,
+    priority: Option<String>,
+    assignee: Option<String>,
+) -> Result<()> {
     let (config, _) = find_config()?;
 
     // We fetch issues + their project field values in one query via projectItems
@@ -24,11 +28,15 @@ pub fn run(status: Option<String>, priority: Option<String>, assignee: Option<St
                                     labels(first: 5) { nodes { name } }
                                 }
                             }
-                            fieldValues(first: 8) {
+                            fieldValues(first: 10) {
                                 nodes {
                                     ... on ProjectV2ItemFieldSingleSelectValue {
                                         name
                                         field { ... on ProjectV2SingleSelectField { name } }
+                                    }
+                                    ... on ProjectV2ItemFieldNumberValue {
+                                        number
+                                        field { ... on ProjectV2Field { name } }
                                     }
                                 }
                             }
@@ -54,11 +62,15 @@ pub fn run(status: Option<String>, priority: Option<String>, assignee: Option<St
         let nodes = items_node["nodes"].as_array().cloned().unwrap_or_default();
         issues.extend(nodes);
 
-        let has_next = items_node["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false);
+        let has_next = items_node["pageInfo"]["hasNextPage"]
+            .as_bool()
+            .unwrap_or(false);
         if !has_next {
             break;
         }
-        cursor = items_node["pageInfo"]["endCursor"].as_str().map(String::from);
+        cursor = items_node["pageInfo"]["endCursor"]
+            .as_str()
+            .map(String::from);
     }
 
     // Parse and filter
@@ -83,13 +95,21 @@ pub fn run(status: Option<String>, priority: Option<String>, assignee: Option<St
 
         let mut item_status = String::from("—");
         let mut item_priority = String::from("—");
+        let mut item_points = String::from("—");
         for fv in item["fieldValues"]["nodes"].as_array().unwrap_or(&vec![]) {
             let field_name = fv["field"]["name"].as_str().unwrap_or("");
-            let value = fv["name"].as_str().unwrap_or("");
             if field_name.eq_ignore_ascii_case("status") {
-                item_status = value.to_string();
+                item_status = fv["name"].as_str().unwrap_or("").to_string();
             } else if field_name.eq_ignore_ascii_case("priority") {
-                item_priority = value.to_string();
+                item_priority = fv["name"].as_str().unwrap_or("").to_string();
+            } else if field_name.eq_ignore_ascii_case("points") {
+                if let Some(n) = fv["number"].as_f64() {
+                    item_points = if n.fract() == 0.0 {
+                        format!("{}", n as i64)
+                    } else {
+                        format!("{n}")
+                    };
+                }
             }
         }
 
@@ -110,7 +130,14 @@ pub fn run(status: Option<String>, priority: Option<String>, assignee: Option<St
             }
         }
 
-        rows.push((number, title.to_string(), item_status, item_priority, assignees.join(",")));
+        rows.push((
+            number,
+            title.to_string(),
+            item_status,
+            item_priority,
+            item_points,
+            assignees.join(","),
+        ));
     }
 
     if rows.is_empty() {
@@ -119,17 +146,22 @@ pub fn run(status: Option<String>, priority: Option<String>, assignee: Option<St
     }
 
     println!(
-        "{:<6} {:<50} {:<14} {:<10} {}",
+        "{:<6} {:<48} {:<14} {:<10} {:<5} {}",
         "#".bold(),
         "Title".bold(),
         "Status".bold(),
         "Priority".bold(),
+        "Pts".bold(),
         "Assignee".bold()
     );
-    println!("{}", "─".repeat(90).dimmed());
+    println!("{}", "─".repeat(95).dimmed());
 
-    for (num, title, status, priority, assignee) in rows {
-        let trunc_title = if title.len() > 48 { format!("{}…", &title[..47]) } else { title };
+    for (num, title, status, priority, points, assignee) in rows {
+        let trunc_title = if title.len() > 46 {
+            format!("{}…", &title[..45])
+        } else {
+            title
+        };
         let colored_priority = match priority.as_str() {
             "P0" => priority.red().bold().to_string(),
             "P1" => priority.red().to_string(),
@@ -137,7 +169,10 @@ pub fn run(status: Option<String>, priority: Option<String>, assignee: Option<St
             "P3" | "P4" => priority.dimmed().to_string(),
             _ => priority,
         };
-        println!("{:<6} {:<50} {:<14} {:<10} {}", num, trunc_title, status, colored_priority, assignee);
+        println!(
+            "{:<6} {:<48} {:<14} {:<10} {:<5} {}",
+            num, trunc_title, status, colored_priority, points, assignee
+        );
     }
 
     Ok(())

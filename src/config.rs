@@ -11,6 +11,8 @@ pub struct Config {
     pub project_number: u64,
     pub status_field_id: String,
     pub priority_field_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points_field_id: Option<String>,
 }
 
 pub fn find_config() -> Result<(Config, PathBuf)> {
@@ -25,9 +27,7 @@ pub fn find_config() -> Result<(Config, PathBuf)> {
             return Ok((config, candidate));
         }
         if !dir.pop() {
-            anyhow::bail!(
-                "No .ghlobes.toml found. Run `glb init` to set up this repository."
-            );
+            anyhow::bail!("No .ghlobes.toml found. Run `glb init` to set up this repository.");
         }
     }
 }

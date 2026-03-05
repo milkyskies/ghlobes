@@ -9,4 +9,5 @@ pub mod reopen;
 pub mod search;
 pub mod show;
 pub mod stats;
+pub mod sub;
 pub mod update;

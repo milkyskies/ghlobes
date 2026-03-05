@@ -12,6 +12,7 @@ pub fn run(
     assignee: Vec<String>,
     priority: Option<String>,
     status: Option<String>,
+    points: Option<f64>,
 ) -> Result<()> {
     let (config, _) = find_config()?;
 
@@ -28,11 +29,17 @@ pub fn run(
     let body_str = body.unwrap_or_default();
     args.extend(["--body", &body_str]);
 
-    let label_args: Vec<String> = label.iter().flat_map(|l| vec!["--label".to_string(), l.clone()]).collect();
+    let label_args: Vec<String> = label
+        .iter()
+        .flat_map(|l| vec!["--label".to_string(), l.clone()])
+        .collect();
     let label_refs: Vec<&str> = label_args.iter().map(String::as_str).collect();
     args.extend(label_refs.iter().copied());
 
-    let assignee_args: Vec<String> = assignee.iter().flat_map(|a| vec!["--assignee".to_string(), a.clone()]).collect();
+    let assignee_args: Vec<String> = assignee
+        .iter()
+        .flat_map(|a| vec!["--assignee".to_string(), a.clone()])
+        .collect();
     let assignee_refs: Vec<&str> = assignee_args.iter().map(String::as_str).collect();
     args.extend(assignee_refs.iter().copied());
 
@@ -49,7 +56,13 @@ pub fn run(
         .context("Could not parse issue number from URL")?;
 
     // Add to project and set fields
-    add_to_project_and_set_fields(&config, issue_number, priority.as_deref(), status.as_deref())?;
+    add_to_project_and_set_fields(
+        &config,
+        issue_number,
+        priority.as_deref(),
+        status.as_deref(),
+        points,
+    )?;
 
     Ok(())
 }
@@ -59,14 +72,22 @@ pub fn add_to_project_and_set_fields(
     issue_number: u64,
     priority: Option<&str>,
     status: Option<&str>,
+    points: Option<f64>,
 ) -> Result<()> {
     // Get issue node ID
     let issue_data = crate::gh::gh_json(&[
-        "issue", "view", &issue_number.to_string(),
-        "--repo", &format!("{}/{}", config.owner, config.repo),
-        "--json", "id",
+        "issue",
+        "view",
+        &issue_number.to_string(),
+        "--repo",
+        &format!("{}/{}", config.owner, config.repo),
+        "--json",
+        "id",
     ])?;
-    let issue_node_id = issue_data["id"].as_str().context("No issue node ID")?.to_string();
+    let issue_node_id = issue_data["id"]
+        .as_str()
+        .context("No issue node ID")?
+        .to_string();
 
     // Get project node ID
     let proj_query = r#"
@@ -76,9 +97,12 @@ pub fn add_to_project_and_set_fields(
             }
         }
     "#;
-    let proj_data = graphql(proj_query, json!({
-        "owner": config.owner, "repo": config.repo, "number": config.project_number
-    }))?;
+    let proj_data = graphql(
+        proj_query,
+        json!({
+            "owner": config.owner, "repo": config.repo, "number": config.project_number
+        }),
+    )?;
     let project_id = proj_data["repository"]["projectV2"]["id"]
         .as_str()
         .context("No project ID")?
@@ -92,25 +116,55 @@ pub fn add_to_project_and_set_fields(
             }
         }
     "#;
-    let add_data = graphql(add_mutation, json!({
-        "projectId": project_id,
-        "contentId": issue_node_id,
-    }))?;
+    let add_data = graphql(
+        add_mutation,
+        json!({
+            "projectId": project_id,
+            "contentId": issue_node_id,
+        }),
+    )?;
     let item_id = add_data["addProjectV2ItemById"]["item"]["id"]
         .as_str()
         .context("Failed to add issue to project")?
         .to_string();
 
-    println!("{} Added to project #{}", "✓".green(), config.project_number);
+    println!(
+        "{} Added to project #{}",
+        "✓".green(),
+        config.project_number
+    );
 
     // Set priority field
     if let Some(p) = priority {
-        set_single_select_field(config, &project_id, &item_id, &config.priority_field_id, p, "Priority")?;
+        set_single_select_field(
+            config,
+            &project_id,
+            &item_id,
+            &config.priority_field_id,
+            p,
+            "Priority",
+        )?;
     }
 
     // Set status field
     if let Some(s) = status {
-        set_single_select_field(config, &project_id, &item_id, &config.status_field_id, s, "Status")?;
+        set_single_select_field(
+            config,
+            &project_id,
+            &item_id,
+            &config.status_field_id,
+            s,
+            "Status",
+        )?;
+    }
+
+    // Set points field
+    if let Some(p) = points {
+        if let Some(ref field_id) = config.points_field_id {
+            set_number_field(&project_id, &item_id, field_id, p)?;
+        } else {
+            eprintln!("Warning: no Points field configured. Run `glb init` to set it up.");
+        }
     }
 
     Ok(())
@@ -141,22 +195,32 @@ fn set_single_select_field(
             }
         }
     "#;
-    let fields_data = graphql(fields_query, json!({
-        "owner": config.owner, "repo": config.repo, "number": config.project_number
-    }))?;
+    let fields_data = graphql(
+        fields_query,
+        json!({
+            "owner": config.owner, "repo": config.repo, "number": config.project_number
+        }),
+    )?;
 
     let fields = fields_data["repository"]["projectV2"]["fields"]["nodes"]
         .as_array()
         .context("No fields")?;
 
-    let field = fields.iter().find(|f| f["id"].as_str() == Some(field_id))
+    let field = fields
+        .iter()
+        .find(|f| f["id"].as_str() == Some(field_id))
         .with_context(|| format!("{field_label} field not found in project"))?;
 
     let option_id = field["options"]
         .as_array()
         .context("No options")?
         .iter()
-        .find(|o| o["name"].as_str().map(|n| n.eq_ignore_ascii_case(value)).unwrap_or(false))
+        .find(|o| {
+            o["name"]
+                .as_str()
+                .map(|n| n.eq_ignore_ascii_case(value))
+                .unwrap_or(false)
+        })
         .with_context(|| format!("Option '{value}' not found for {field_label}"))?["id"]
         .as_str()
         .context("Option has no id")?
@@ -175,13 +239,44 @@ fn set_single_select_field(
         }
     "#;
 
-    graphql(mutation, json!({
-        "projectId": project_id,
-        "itemId": item_id,
-        "fieldId": field_id,
-        "optionId": option_id,
-    }))?;
+    graphql(
+        mutation,
+        json!({
+            "projectId": project_id,
+            "itemId": item_id,
+            "fieldId": field_id,
+            "optionId": option_id,
+        }),
+    )?;
 
     println!("{} Set {field_label} → {value}", "✓".green());
+    Ok(())
+}
+
+fn set_number_field(project_id: &str, item_id: &str, field_id: &str, value: f64) -> Result<()> {
+    let mutation = r#"
+        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $number: Float!) {
+            updateProjectV2ItemFieldValue(input: {
+                projectId: $projectId
+                itemId: $itemId
+                fieldId: $fieldId
+                value: { number: $number }
+            }) {
+                projectV2Item { id }
+            }
+        }
+    "#;
+
+    graphql(
+        mutation,
+        json!({
+            "projectId": project_id,
+            "itemId": item_id,
+            "fieldId": field_id,
+            "number": value,
+        }),
+    )?;
+
+    println!("{} Set Points → {value}", "✓".green());
     Ok(())
 }

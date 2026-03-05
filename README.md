@@ -34,6 +34,4 @@ A Rust CLI that wraps gh CLI + GitHub GraphQL API to give you beads-like workflo
 
 ## One-time setup
 
-1. Create a GitHub Project on the repo
-2. Add custom fields: Status (single-select), Priority (single-select)
-3. Run `glb init` which auto-detects project number and writes `.ghlobes.toml`
+1. Run `glb init`

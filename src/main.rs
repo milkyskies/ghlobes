@@ -65,6 +65,8 @@ enum Command {
         number: u64,
         #[arg(long, short = 't')]
         title: Option<String>,
+        #[arg(long, short = 'b')]
+        body: Option<String>,
         #[arg(long, short = 's')]
         status: Option<String>,
         #[arg(long, short = 'p')]
@@ -180,13 +182,14 @@ fn main() -> Result<()> {
         Command::Update {
             number,
             title,
+            body,
             status,
             priority,
             assignee,
             claim,
             points,
         } => {
-            commands::update::run(number, title, status, priority, assignee, claim, points)?;
+            commands::update::run(number, title, body, status, priority, assignee, claim, points)?;
         }
         Command::Close { number, comment } => {
             commands::close::run(number, comment)?;

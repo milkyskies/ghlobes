@@ -8,6 +8,7 @@ use crate::gh::graphql;
 pub fn run(
     number: u64,
     title: Option<String>,
+    body: Option<String>,
     status: Option<String>,
     priority: Option<String>,
     assignee: Option<String>,
@@ -23,13 +24,14 @@ pub fn run(
     };
 
     if title.is_none()
+        && body.is_none()
         && status.is_none()
         && priority.is_none()
         && assignee.is_none()
         && points.is_none()
     {
         anyhow::bail!(
-            "Specify at least one of --title, --status, --priority, --assignee, --points, or --claim"
+            "Specify at least one of --title, --body, --status, --priority, --assignee, --points, or --claim"
         );
     }
 
@@ -46,7 +48,20 @@ pub fn run(
         println!("{} Title → {t}", "✓".green());
     }
 
-    // If only title was updated, skip project field updates
+    if let Some(ref b) = body {
+        crate::gh::gh(&[
+            "issue",
+            "edit",
+            &number.to_string(),
+            "--repo",
+            &format!("{}/{}", config.owner, config.repo),
+            "--body",
+            b,
+        ])?;
+        println!("{} Body updated", "✓".green());
+    }
+
+    // If only title/body was updated, skip project field updates
     if status.is_none() && priority.is_none() && assignee.is_none() && points.is_none() {
         return Ok(());
     }

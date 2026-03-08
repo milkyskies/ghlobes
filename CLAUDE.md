@@ -21,7 +21,7 @@ All state lives in GitHub — no local database.
 | `glb show <num>` | Show issue details, deps, status, priority, points, sub-issues |
 | `glb create --title "..." --priority P1 --status Todo --points 3` | Create an issue |
 | `glb update <num> --claim` | Claim issue (sets status to In Progress) |
-| `glb update <num> --title <t> --status <s> --priority <p> --points <n>` | Update fields |
+| `glb update <num> --title <t> --body <b> --status <s> --priority <p> --points <n>` | Update fields |
 | `glb close <num>` | Close an issue |
 | `glb reopen <num>` | Reopen a closed issue |
 | `glb dep add <issue> <blocked_by>` | Add a blocking dependency |

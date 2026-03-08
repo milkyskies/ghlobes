@@ -7,6 +7,7 @@ use crate::gh::graphql;
 
 pub fn run(
     number: u64,
+    title: Option<String>,
     status: Option<String>,
     priority: Option<String>,
     assignee: Option<String>,
@@ -21,10 +22,33 @@ pub fn run(
         status
     };
 
-    if status.is_none() && priority.is_none() && assignee.is_none() && points.is_none() {
+    if title.is_none()
+        && status.is_none()
+        && priority.is_none()
+        && assignee.is_none()
+        && points.is_none()
+    {
         anyhow::bail!(
-            "Specify at least one of --status, --priority, --assignee, --points, or --claim"
+            "Specify at least one of --title, --status, --priority, --assignee, --points, or --claim"
         );
+    }
+
+    if let Some(ref t) = title {
+        crate::gh::gh(&[
+            "issue",
+            "edit",
+            &number.to_string(),
+            "--repo",
+            &format!("{}/{}", config.owner, config.repo),
+            "--title",
+            t,
+        ])?;
+        println!("{} Title → {t}", "✓".green());
+    }
+
+    // If only title was updated, skip project field updates
+    if status.is_none() && priority.is_none() && assignee.is_none() && points.is_none() {
+        return Ok(());
     }
 
     // Get the project item ID for this issue

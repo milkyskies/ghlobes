@@ -73,7 +73,7 @@ pub fn run(
     let status_field_id = match find_field(fields, "status") {
         Some(id) => {
             println!("  {} Found Status field", "✓".green());
-            ensure_status_options(fields, &id)?;
+            warn_missing_status_options(fields, &id);
             id
         }
         None => {
@@ -415,19 +415,13 @@ fn create_points_field(project_id: &str) -> Result<String> {
     Ok(field_id)
 }
 
-fn ensure_status_options(fields: &[serde_json::Value], field_id: &str) -> Result<()> {
-    let required = vec![
-        ("backlog", "BLUE"),
-        ("open", "GREEN"),
-        ("in_progress", "YELLOW"),
-        ("blocked", "RED"),
-        ("closed", "GRAY"),
-    ];
+fn warn_missing_status_options(fields: &[serde_json::Value], field_id: &str) {
+    let required = ["backlog", "open", "in_progress", "blocked", "closed"];
 
-    let field = fields
-        .iter()
-        .find(|f| f["id"].as_str() == Some(field_id))
-        .context("Status field not found")?;
+    let field = match fields.iter().find(|f| f["id"].as_str() == Some(field_id)) {
+        Some(f) => f,
+        None => return,
+    };
 
     let existing_opts = field["options"].as_array().cloned().unwrap_or_default();
     let existing_names: Vec<String> = existing_opts
@@ -435,68 +429,19 @@ fn ensure_status_options(fields: &[serde_json::Value], field_id: &str) -> Result
         .filter_map(|o| o["name"].as_str().map(|s| s.to_lowercase()))
         .collect();
 
-    let missing: Vec<(&str, &str)> = required
+    let missing: Vec<&&str> = required
         .iter()
-        .filter(|(name, _)| !existing_names.contains(&name.to_lowercase()))
-        .copied()
+        .filter(|name| !existing_names.contains(&name.to_lowercase()))
         .collect();
 
-    if missing.is_empty() {
-        return Ok(());
+    if !missing.is_empty() {
+        let names: Vec<&str> = missing.iter().map(|n| **n).collect();
+        println!(
+            "  {} Missing status options: {}. Add them manually in your GitHub Project settings.",
+            "⚠".yellow(),
+            names.join(", ")
+        );
     }
-
-    let missing_names: Vec<&str> = missing.iter().map(|(n, _)| *n).collect();
-    println!(
-        "  {} Adding missing status options: {}",
-        "→".yellow(),
-        missing_names.join(", ")
-    );
-
-    // Build full options list: existing + missing
-    let mut all_options: Vec<serde_json::Value> = existing_opts
-        .iter()
-        .map(|o| {
-            json!({
-                "name": o["name"].as_str().unwrap_or(""),
-                "color": o["color"].as_str().unwrap_or("GRAY"),
-                "description": o["description"].as_str().unwrap_or(""),
-            })
-        })
-        .collect();
-
-    for (name, color) in &missing {
-        all_options.push(json!({
-            "name": name,
-            "color": color,
-            "description": "",
-        }));
-    }
-
-    let mutation = r#"
-        mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
-            updateProjectV2Field(input: {
-                fieldId: $fieldId
-                singleSelectOptions: $options
-            }) {
-                projectV2Field { ... on ProjectV2SingleSelectField { id } }
-            }
-        }
-    "#;
-
-    graphql(
-        mutation,
-        json!({
-            "fieldId": field_id,
-            "options": all_options,
-        }),
-    )?;
-
-    println!(
-        "  {} Status options updated",
-        "✓".green()
-    );
-
-    Ok(())
 }
 
 fn print_field_options(fields: &[serde_json::Value], name: &str) {

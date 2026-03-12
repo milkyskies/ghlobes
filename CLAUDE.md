@@ -19,7 +19,7 @@ All state lives in GitHub — no local database.
 | `glb ready` | Show issues ready to work (unblocked, not in progress) |
 | `glb list` | List all open issues. Filters: `--status`, `--priority`, `--assignee` |
 | `glb show <num>` | Show issue details, deps, status, priority, points, sub-issues |
-| `glb create --title "..." --priority P1 --status Todo --points 3` | Create an issue |
+| `glb create --title "..." --priority P1 --status Backlog --points 3` | Create an issue |
 | `glb update <num> --claim` | Claim issue (sets status to In Progress) |
 | `glb update <num> --title <t> --body <b> --status <s> --priority <p> --points <n>` | Update fields |
 | `glb close <num>` | Close an issue |

@@ -72,7 +72,9 @@ pub fn run() -> Result<()> {
                 }
             }
 
-            if item_status.eq_ignore_ascii_case("in progress") {
+            if item_status.eq_ignore_ascii_case("in progress")
+                || item_status.eq_ignore_ascii_case("backlog")
+            {
                 continue;
             }
 

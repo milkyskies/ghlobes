@@ -44,7 +44,7 @@ pub fn run(
                             ... on ProjectV2SingleSelectField {
                                 id
                                 name
-                                options { id name }
+                                options { id name color description }
                             }
                             ... on ProjectV2Field {
                                 id
@@ -73,6 +73,7 @@ pub fn run(
     let status_field_id = match find_field(fields, "status") {
         Some(id) => {
             println!("  {} Found Status field", "✓".green());
+            ensure_status_options(fields, &id)?;
             id
         }
         None => {
@@ -412,6 +413,90 @@ fn create_points_field(project_id: &str) -> Result<String> {
         "✓".green()
     );
     Ok(field_id)
+}
+
+fn ensure_status_options(fields: &[serde_json::Value], field_id: &str) -> Result<()> {
+    let required = vec![
+        ("backlog", "BLUE"),
+        ("open", "GREEN"),
+        ("in_progress", "YELLOW"),
+        ("blocked", "RED"),
+        ("closed", "GRAY"),
+    ];
+
+    let field = fields
+        .iter()
+        .find(|f| f["id"].as_str() == Some(field_id))
+        .context("Status field not found")?;
+
+    let existing_opts = field["options"].as_array().cloned().unwrap_or_default();
+    let existing_names: Vec<String> = existing_opts
+        .iter()
+        .filter_map(|o| o["name"].as_str().map(|s| s.to_lowercase()))
+        .collect();
+
+    let missing: Vec<(&str, &str)> = required
+        .iter()
+        .filter(|(name, _)| !existing_names.contains(&name.to_lowercase()))
+        .copied()
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let missing_names: Vec<&str> = missing.iter().map(|(n, _)| *n).collect();
+    println!(
+        "  {} Adding missing status options: {}",
+        "→".yellow(),
+        missing_names.join(", ")
+    );
+
+    // Build full options list: existing + missing
+    let mut all_options: Vec<serde_json::Value> = existing_opts
+        .iter()
+        .map(|o| {
+            json!({
+                "name": o["name"].as_str().unwrap_or(""),
+                "color": o["color"].as_str().unwrap_or("GRAY"),
+                "description": o["description"].as_str().unwrap_or(""),
+            })
+        })
+        .collect();
+
+    for (name, color) in &missing {
+        all_options.push(json!({
+            "name": name,
+            "color": color,
+            "description": "",
+        }));
+    }
+
+    let mutation = r#"
+        mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+            updateProjectV2Field(input: {
+                fieldId: $fieldId
+                singleSelectOptions: $options
+            }) {
+                projectV2Field { ... on ProjectV2SingleSelectField { id } }
+            }
+        }
+    "#;
+
+    graphql(
+        mutation,
+        json!({
+            "fieldId": field_id,
+            "options": all_options,
+        }),
+    )?;
+
+    println!(
+        "  {} Status options updated",
+        "✓".green()
+    );
+
+    Ok(())
 }
 
 fn print_field_options(fields: &[serde_json::Value], name: &str) {

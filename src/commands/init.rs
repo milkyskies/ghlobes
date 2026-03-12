@@ -296,11 +296,10 @@ fn create_status_field(project_id: &str) -> Result<String> {
             "projectId": project_id,
             "name": "Status",
             "options": [
-                { "name": "backlog", "color": "BLUE", "description": "" },
-                { "name": "open", "color": "GREEN", "description": "" },
-                { "name": "in_progress", "color": "YELLOW", "description": "" },
-                { "name": "blocked", "color": "RED", "description": "" },
-                { "name": "closed", "color": "GRAY", "description": "" },
+                { "name": "Backlog", "color": "BLUE", "description": "" },
+                { "name": "Todo", "color": "GREEN", "description": "This item hasn't been started" },
+                { "name": "In Progress", "color": "YELLOW", "description": "This is actively being worked on" },
+                { "name": "Done", "color": "PURPLE", "description": "This has been completed" },
             ],
         }),
     )?;
@@ -311,7 +310,7 @@ fn create_status_field(project_id: &str) -> Result<String> {
         .to_string();
 
     println!(
-        "  {} Created Status field (backlog, open, in_progress, blocked, closed)",
+        "  {} Created Status field (Backlog, Todo, In Progress, Done)",
         "✓".green()
     );
     Ok(field_id)
@@ -416,7 +415,7 @@ fn create_points_field(project_id: &str) -> Result<String> {
 }
 
 fn warn_missing_status_options(fields: &[serde_json::Value], field_id: &str) {
-    let required = ["backlog", "open", "in_progress", "blocked", "closed"];
+    let required = ["backlog", "todo", "in progress", "done"];
 
     let field = match fields.iter().find(|f| f["id"].as_str() == Some(field_id)) {
         Some(f) => f,
@@ -500,6 +499,15 @@ All state lives in GitHub — no local database.
 | `glb search "query"` | Search issues by text |
 | `glb stats` | Show open/closed/blocked/ready counts |
 | `glb init --update-claude-md` | Refresh these agent instructions |
+
+### Statuses
+
+- **Backlog** — acknowledged, not yet prioritized for active work
+- **Todo** — ready to be picked up
+- **In Progress** — someone is actively working on it
+- **Done** — completed
+
+`glb ready` shows only **Todo** issues that are unblocked and unassigned.
 
 ### Points
 

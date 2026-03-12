@@ -21,7 +21,7 @@ All state lives in GitHub — no local database.
 | `glb show <num>` | Show issue details, deps, status, priority, points, sub-issues |
 | `glb create --title "..." --priority P1 --status Backlog --points 3` | Create an issue |
 | `glb update <num> --claim` | Claim issue (sets status to In Progress) |
-| `glb update <num> --title <t> --body <b> --status <s> --priority <p> --points <n>` | Update fields |
+| `glb update <num> --status <s> --priority <p> --points <n>` | Update fields |
 | `glb close <num>` | Close an issue |
 | `glb reopen <num>` | Reopen a closed issue |
 | `glb dep add <issue> <blocked_by>` | Add a blocking dependency |
@@ -33,6 +33,15 @@ All state lives in GitHub — no local database.
 | `glb search "query"` | Search issues by text |
 | `glb stats` | Show open/closed/blocked/ready counts |
 | `glb init --update-claude-md` | Refresh these agent instructions |
+
+### Statuses
+
+- **Backlog** — acknowledged, not yet prioritized for active work
+- **Todo** — ready to be picked up
+- **In Progress** — someone is actively working on it
+- **Done** — completed
+
+`glb ready` shows only **Todo** issues that are unblocked and unassigned.
 
 ### Points
 

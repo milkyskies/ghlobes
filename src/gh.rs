@@ -28,13 +28,14 @@ pub fn graphql(query: &str, variables: Value) -> Result<Value> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("gh api graphql failed: {stderr}");
+        anyhow::bail!("gh api graphql failed: {stderr}{}", scope_hint(&stderr));
     }
 
     let json: Value = serde_json::from_slice(&output.stdout).context("Failed to parse gh api graphql output")?;
 
     if let Some(errors) = json.get("errors") {
-        anyhow::bail!("GraphQL errors: {errors}");
+        let msg = errors.to_string();
+        anyhow::bail!("GraphQL errors: {msg}{}", scope_hint(&msg));
     }
 
     Ok(json["data"].clone())
@@ -60,4 +61,34 @@ pub fn gh_json(args: &[&str]) -> Result<Value> {
     let out = gh(args)?;
     let json: Value = serde_json::from_str(&out).context("Failed to parse gh output as JSON")?;
     Ok(json)
+}
+
+/// If the error mentions a missing GitHub OAuth scope, return a hint with the
+/// `gh auth refresh` command needed to add it. Returns an empty string otherwise.
+fn scope_hint(msg: &str) -> String {
+    let mut scopes: Vec<&str> = Vec::new();
+    for scope in [
+        "read:project",
+        "project",
+        "repo",
+        "read:org",
+        "write:org",
+        "admin:org",
+        "workflow",
+        "gist",
+        "user",
+        "read:user",
+    ] {
+        let needle = format!("'{scope}'");
+        if msg.contains(&needle) && !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    if scopes.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nHint: your gh token is missing required scope(s). Run:\n  gh auth refresh -s {}",
+        scopes.join(",")
+    )
 }

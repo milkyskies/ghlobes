@@ -197,9 +197,9 @@ fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
         anyhow::bail!("No project selected. Run `ghlobes init --project <number>` to specify one.");
     }
 
-    let title = prompt("Project title [ghlobes]: ")?;
+    let title = prompt(&format!("Project title [{repo}]: "))?;
     let title = if title.is_empty() {
-        "ghlobes".to_string()
+        repo.to_string()
     } else {
         title
     };
@@ -566,12 +566,45 @@ glb dep add 12 11   # #12 blocked by #11
 }
 
 fn detect_owner_repo() -> Result<(String, String)> {
-    let out = gh(&["repo", "view", "--json", "owner,name"])?;
-    let json: serde_json::Value = serde_json::from_str(&out)?;
-    let owner = json["owner"]["login"]
-        .as_str()
-        .context("No owner")?
-        .to_string();
-    let name = json["name"].as_str().context("No repo name")?.to_string();
-    Ok((owner, name))
+    if let Ok(out) = gh(&["repo", "view", "--json", "owner,name"]) {
+        let json: serde_json::Value = serde_json::from_str(&out)?;
+        let owner = json["owner"]["login"]
+            .as_str()
+            .context("No owner")?
+            .to_string();
+        let name = json["name"].as_str().context("No repo name")?.to_string();
+        return Ok((owner, name));
+    }
+
+    println!(
+        "{} Not in a GitHub repo. Specify the repo to track issues against.",
+        "→".yellow()
+    );
+    let default_owner = gh(&["api", "user", "--jq", ".login"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let owner = loop {
+        let prompt_msg = match &default_owner {
+            Some(d) => format!("GitHub owner [{d}]: "),
+            None => "GitHub owner: ".to_string(),
+        };
+        let input = prompt(&prompt_msg)?;
+        if !input.is_empty() {
+            break input;
+        }
+        if let Some(d) = &default_owner {
+            break d.clone();
+        }
+    };
+
+    let repo = loop {
+        let input = prompt("GitHub repo name: ")?;
+        if !input.is_empty() {
+            break input;
+        }
+    };
+
+    Ok((owner, repo))
 }

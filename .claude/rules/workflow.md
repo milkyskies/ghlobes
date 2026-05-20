@@ -1,0 +1,1 @@
+/Users/onesc/.claude/kit/modules/core/rules/workflow.md

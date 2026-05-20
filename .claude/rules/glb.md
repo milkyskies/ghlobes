@@ -1,0 +1,1 @@
+/Users/onesc/.claude/kit/modules/ghlobes/rules/glb.md

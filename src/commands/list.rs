@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::config::find_config;
 use crate::gh::graphql;
+use crate::util::truncate;
 
 pub fn run(
     status: Option<String>,
@@ -157,11 +158,7 @@ pub fn run(
     println!("{}", "─".repeat(95).dimmed());
 
     for (num, title, status, priority, points, assignee) in rows {
-        let trunc_title = if title.len() > 46 {
-            format!("{}…", &title[..45])
-        } else {
-            title
-        };
+        let trunc_title = truncate(&title, 46);
         let colored_priority = match priority.as_str() {
             "P0" => priority.red().bold().to_string(),
             "P1" => priority.red().to_string(),

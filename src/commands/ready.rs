@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::config::find_config;
 use crate::gh::graphql;
+use crate::util::truncate;
 
 pub fn run() -> Result<()> {
     let (config, _) = find_config()?;
@@ -113,7 +114,7 @@ pub fn run() -> Result<()> {
     println!("{} ready issues (unblocked, not in progress):", ready.len().to_string().green().bold());
     println!("{}", "─".repeat(60).dimmed());
     for (num, title, assignees) in ready {
-        let trunc = if title.len() > 52 { format!("{}…", &title[..51]) } else { title };
+        let trunc = truncate(&title, 52);
         let assignee_str = if assignees.is_empty() {
             "unassigned".dimmed().to_string()
         } else {

@@ -3,6 +3,7 @@ use colored::Colorize;
 
 use crate::config::find_config;
 use crate::gh::gh_json;
+use crate::util::truncate;
 
 pub fn run(query: &str) -> Result<()> {
     let (config, _) = find_config()?;
@@ -36,7 +37,7 @@ pub fn run(query: &str) -> Result<()> {
             "CLOSED" => state.red().to_string(),
             _ => state.to_string(),
         };
-        let trunc = if title.len() > 50 { format!("{}…", &title[..49]) } else { title.to_string() };
+        let trunc = truncate(title, 50);
         println!("  #{:<6} {:<52} {}", number, trunc, state_colored);
     }
 

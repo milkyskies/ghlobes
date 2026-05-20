@@ -23,6 +23,13 @@ A Rust CLI that wraps gh CLI + GitHub GraphQL API to give you beads-like workflo
 | `glb close <num>` | Close issue | gh issue close |
 | `glb dep add <a> <b>` | A is blocked by B | addBlockedByRelation GraphQL mutation |
 | `glb blocked` | Show all blocked issues | Query all open issues, filter by open blockedBy |
+| `glb stuck` | Top blockers + per-epic stuck counts | Rank issues by direct dependents |
+| `glb tree <num>` | Recursive sub-issue tree with status | Walks subIssues recursively |
+| `glb deps <num>` | Transitive upstream/downstream dep tree | Walks blockedBy/blocking from in-memory graph |
+| `glb closed --since 7d` | Recently closed (date or `--in-epic <num>`) | gh search with `closed:>=` filter |
+| `glb done <num>` | Close + show newly unblocked + suggest next | Snapshot graph, close, diff |
+| `glb path` | Critical path + high-leverage issues. `--epic`, `--explain` | Build dep graph, longest-path DP weighted by points |
+| `glb next` | Recommend next batch. `--diverse`, `--reason`, `--exclude`, `--epic`, `--track` | Score ready issues + sub-of-epic credit, anti-conflict greedy pick |
 | `glb stats` | Open/closed/blocked counts | Aggregate query |
 
 ## Key decisions

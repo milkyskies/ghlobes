@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::config::find_config;
 use crate::gh::graphql;
+use crate::util::truncate;
 
 pub fn run() -> Result<()> {
     let (config, _) = find_config()?;
@@ -72,7 +73,7 @@ pub fn run() -> Result<()> {
     println!("{} blocked issues:", blocked.len().to_string().red().bold());
     println!("{}", "─".repeat(60).dimmed());
     for (num, title, blockers) in blocked {
-        let trunc = if title.len() > 50 { format!("{}…", &title[..49]) } else { title };
+        let trunc = truncate(&title, 50);
         println!("  {} #{:<6} {}", "●".red(), num, trunc);
         for b in blockers {
             println!(

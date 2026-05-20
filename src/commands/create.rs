@@ -16,6 +16,16 @@ pub fn run(
 ) -> Result<()> {
     let (config, _) = find_config()?;
 
+    // Reject em/en dashes in titles — they break naive byte slicing in older
+    // tools and the project convention is to use hyphens or colons instead.
+    if let Some(ref t) = title {
+        if let Some(bad) = t.chars().find(|c| matches!(c, '—' | '–')) {
+            anyhow::bail!(
+                "Title contains '{bad}'. Use a hyphen '-' or colon ':' instead.\n  Got: {t}"
+            );
+        }
+    }
+
     // Build gh issue create args — it handles interactive editor/prompts for us
     let repo_str = format!("{}/{}", config.owner, config.repo);
     let mut args = vec!["issue", "create", "--repo", &repo_str];

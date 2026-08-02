@@ -3,7 +3,7 @@ use colored::Colorize;
 
 use crate::commands::close;
 use crate::config::find_config;
-use crate::graph::IssueGraph;
+use crate::graph::{IssueGraph, status_is_claimable};
 use crate::util::truncate;
 
 pub fn run(number: u64, comment: Option<String>) -> Result<()> {
@@ -18,28 +18,9 @@ pub fn run(number: u64, comment: Option<String>) -> Result<()> {
         .map(|n| n.title.clone())
         .unwrap_or_else(|| "?".to_string());
 
-    // Compute what was directly waiting on this issue
-    let directly_blocked: Vec<u64> = before
-        .blocking
-        .get(&number)
-        .map(|s| s.iter().copied().collect())
-        .unwrap_or_default();
-
-    // Newly-unblocked: each direct dependent that was blocked ONLY by this issue
-    // (i.e., its blocked_by set is exactly {number} or all-but-this are already closed/missing).
-    let mut newly_unblocked: Vec<u64> = Vec::new();
-    for &dep_num in &directly_blocked {
-        let dep_blockers = before
-            .blocked_by
-            .get(&dep_num)
-            .cloned()
-            .unwrap_or_default();
-        // Only blocker is this one — if so, this close unblocks it
-        if dep_blockers.len() == 1 && dep_blockers.contains(&number) {
-            newly_unblocked.push(dep_num);
-        }
-    }
-    newly_unblocked.sort();
+    // These read the `blocking_all` edge, not `blocking`: a `closes #N` line in a pushed commit makes GitHub close the issue before `glb done` ever runs, and a closed issue is absent from the graph, so its `blocking` edges are gone by then.
+    let directly_blocked = before.dependents_of(number);
+    let newly_unblocked = before.newly_unblocked_by(number);
 
     // Now actually close
     close::run(number, comment)?;
@@ -87,16 +68,19 @@ pub fn run(number: u64, comment: Option<String>) -> Result<()> {
     } else {
         println!(
             "{}",
-            format!(
-                "Newly unblocked ({}):",
-                newly_unblocked.len()
-            )
-            .green()
-            .bold()
+            format!("Newly unblocked ({}):", newly_unblocked.len())
+                .green()
+                .bold()
         );
         for &n in &newly_unblocked {
             if let Some(node) = before.nodes.get(&n) {
-                println!("  #{n:<5} {}", truncate(&node.title, 50));
+                // An unblocked issue that is not Todo will not show up in `glb ready`, so say so rather than let the two disagree.
+                let note = if status_is_claimable(&node.status) {
+                    String::new()
+                } else {
+                    format!(" (status is {})", node.status).dimmed().to_string()
+                };
+                println!("  #{n:<5} {}{}", truncate(&node.title, 50), note);
             }
         }
 
@@ -110,11 +94,7 @@ pub fn run(number: u64, comment: Option<String>) -> Result<()> {
             println!();
             println!(
                 "{}",
-                format!(
-                    "Still partially waiting ({}):",
-                    still_blocked.len()
-                )
-                .dimmed()
+                format!("Still partially waiting ({}):", still_blocked.len()).dimmed()
             );
             for &n in &still_blocked {
                 if let Some(node) = before.nodes.get(&n) {

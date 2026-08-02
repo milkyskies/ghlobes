@@ -14,8 +14,10 @@ pub struct IssueNode {
     pub points: Option<f64>,
     pub status: String,
     pub assignees: Vec<String>,
-    /// Issue numbers that this issue is blocked by
+    /// Open issue numbers that this issue is blocked by
     pub blocked_by: Vec<u64>,
+    /// Every issue number listed as a blocker, open or closed. Needed to answer "what was waiting on X" after X has already been closed, when X no longer appears in the graph at all.
+    pub blocked_by_all: Vec<u64>,
     /// Open sub-issue numbers (makes this an epic)
     pub sub_issues: Vec<u64>,
     /// True if this issue has any sub-issues (open or closed)
@@ -34,6 +36,8 @@ pub struct IssueGraph {
     pub blocked_by: HashMap<u64, HashSet<u64>>,
     /// blocking edge (reverse): issue -> set of issues it blocks
     pub blocking: HashMap<u64, HashSet<u64>>,
+    /// Reverse edge over `blocked_by_all`, so a closed issue still reports what was waiting on it.
+    pub blocking_all: HashMap<u64, HashSet<u64>>,
     /// child -> parent epic (for the nearest parent epic of an issue)
     pub parent_of: HashMap<u64, u64>,
 }
@@ -128,6 +132,11 @@ impl IssueGraph {
                     })
                     .unwrap_or_default();
 
+                let blocked_by_all: Vec<u64> = content["blockedBy"]["nodes"]
+                    .as_array()
+                    .map(|b| b.iter().filter_map(|x| x["number"].as_u64()).collect())
+                    .unwrap_or_default();
+
                 let all_subs: Vec<_> = content["subIssues"]["nodes"]
                     .as_array()
                     .cloned()
@@ -165,6 +174,7 @@ impl IssueGraph {
                         status,
                         assignees,
                         blocked_by,
+                        blocked_by_all,
                         sub_issues,
                         is_epic,
                     },
@@ -185,6 +195,7 @@ impl IssueGraph {
         // Build adjacency maps (only for edges where both ends exist in our graph)
         let mut blocked_by_map: HashMap<u64, HashSet<u64>> = HashMap::new();
         let mut blocking_map: HashMap<u64, HashSet<u64>> = HashMap::new();
+        let mut blocking_all_map: HashMap<u64, HashSet<u64>> = HashMap::new();
         let mut parent_of: HashMap<u64, u64> = HashMap::new();
 
         for (num, node) in &nodes {
@@ -193,6 +204,10 @@ impl IssueGraph {
                     blocked_by_map.entry(*num).or_default().insert(dep);
                     blocking_map.entry(dep).or_default().insert(*num);
                 }
+            }
+            // No `nodes.contains_key` guard: the whole point is to keep edges pointing at issues that have already closed and therefore left the graph.
+            for &dep in &node.blocked_by_all {
+                blocking_all_map.entry(dep).or_default().insert(*num);
             }
             if node.is_epic {
                 for &sub in &node.sub_issues {
@@ -208,6 +223,7 @@ impl IssueGraph {
             nodes,
             blocked_by: blocked_by_map,
             blocking: blocking_map,
+            blocking_all: blocking_all_map,
             parent_of,
         })
     }
@@ -422,6 +438,31 @@ impl IssueGraph {
         }
     }
 
+    /// Every issue that lists `number` as a blocker, whether or not `number` is still open.
+    pub fn dependents_of(&self, number: u64) -> Vec<u64> {
+        let mut deps: Vec<u64> = self
+            .blocking_all
+            .get(&number)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        deps.sort();
+        deps
+    }
+
+    /// Dependents of `number` with no other open blocker left holding them back.
+    pub fn newly_unblocked_by(&self, number: u64) -> Vec<u64> {
+        self.dependents_of(number)
+            .into_iter()
+            .filter(|dep| {
+                self.blocked_by
+                    .get(dep)
+                    .map(|s| s.iter().filter(|&&x| x != number).count())
+                    .unwrap_or(0)
+                    == 0
+            })
+            .collect()
+    }
+
     /// Check if an issue is ready (unblocked, open, Todo, not an epic).
     pub fn is_ready(&self, number: u64) -> bool {
         let node = match self.nodes.get(&number) {
@@ -491,6 +532,7 @@ mod tests {
             status: status.to_string(),
             assignees: Vec::new(),
             blocked_by: Vec::new(),
+            blocked_by_all: Vec::new(),
             sub_issues: Vec::new(),
             is_epic: false,
         }
@@ -499,18 +541,31 @@ mod tests {
     fn graph_of(nodes: Vec<IssueNode>) -> IssueGraph {
         let mut blocked_by: HashMap<u64, HashSet<u64>> = HashMap::new();
         let mut blocking: HashMap<u64, HashSet<u64>> = HashMap::new();
+        let mut blocking_all: HashMap<u64, HashSet<u64>> = HashMap::new();
         for n in &nodes {
             for &dep in &n.blocked_by {
                 blocked_by.entry(n.number).or_default().insert(dep);
                 blocking.entry(dep).or_default().insert(n.number);
+            }
+            for &dep in &n.blocked_by_all {
+                blocking_all.entry(dep).or_default().insert(n.number);
             }
         }
         IssueGraph {
             nodes: nodes.into_iter().map(|n| (n.number, n)).collect(),
             blocked_by,
             blocking,
+            blocking_all,
             parent_of: HashMap::new(),
         }
+    }
+
+    /// `open_blockers` are still holding the issue back; `all_blockers` includes ones that have since closed.
+    fn blocked(number: u64, open_blockers: &[u64], all_blockers: &[u64]) -> IssueNode {
+        let mut n = node(number, "Todo");
+        n.blocked_by = open_blockers.to_vec();
+        n.blocked_by_all = all_blockers.to_vec();
+        n
     }
 
     #[test]
@@ -575,6 +630,50 @@ mod tests {
         epic.sub_issues = vec![2];
         let g = graph_of(vec![epic, node(2, "Todo")]);
         assert!(!g.is_ready(1));
+    }
+
+    #[test]
+    fn closing_an_issue_reports_every_dependent_it_freed() {
+        let g = graph_of(vec![
+            node(1, "Todo"),
+            blocked(2, &[1], &[1]),
+            blocked(3, &[1], &[1]),
+            blocked(4, &[1], &[1]),
+        ]);
+        assert_eq!(g.newly_unblocked_by(1), vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn a_dependent_with_another_open_blocker_is_not_reported_unblocked() {
+        let g = graph_of(vec![
+            node(1, "Todo"),
+            node(9, "Todo"),
+            blocked(2, &[1, 9], &[1, 9]),
+        ]);
+        assert_eq!(g.dependents_of(1), vec![2]);
+        assert!(g.newly_unblocked_by(1).is_empty());
+    }
+
+    #[test]
+    fn an_issue_with_no_dependents_reports_none() {
+        let g = graph_of(vec![node(1, "Todo")]);
+        assert!(g.dependents_of(1).is_empty());
+        assert!(g.newly_unblocked_by(1).is_empty());
+    }
+
+    /// A `closes #N` line in a pushed commit closes the issue before `glb done` runs, so by then #N is absent from the graph and its open-blocker edges are gone. The dependents must still be reported.
+    #[test]
+    fn dependents_are_reported_even_when_the_blocker_already_closed() {
+        let g = graph_of(vec![blocked(2, &[], &[1]), blocked(3, &[], &[1])]);
+        assert_eq!(g.dependents_of(1), vec![2, 3]);
+        assert_eq!(g.newly_unblocked_by(1), vec![2, 3]);
+    }
+
+    #[test]
+    fn an_already_closed_blocker_still_leaves_other_open_blockers_counted() {
+        let g = graph_of(vec![node(9, "Todo"), blocked(2, &[9], &[1, 9])]);
+        assert_eq!(g.dependents_of(1), vec![2]);
+        assert!(g.newly_unblocked_by(1).is_empty());
     }
 
     #[test]

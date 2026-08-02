@@ -6,11 +6,7 @@ use std::io::{self, Write};
 use crate::config::{Config, write_config};
 use crate::gh::{gh, graphql};
 
-pub fn run(
-    owner: Option<String>,
-    repo: Option<String>,
-    project_number: Option<u64>,
-) -> Result<()> {
+pub fn run(owner: Option<String>, repo: Option<String>, project_number: Option<u64>) -> Result<()> {
     let (owner, repo) = match (owner, repo) {
         (Some(o), Some(r)) => (o, r),
         _ => detect_owner_repo()?,
@@ -64,7 +60,7 @@ pub fn run(
     let status_field_id = match find_field(fields, "status") {
         Some(id) => {
             println!("  {} Found Status field", "✓".green());
-            warn_missing_status_options(fields, &id);
+            repair_status_options(fields, &id)?;
             id
         }
         None => {
@@ -262,6 +258,92 @@ fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
     Ok(project_number)
 }
 
+/// Workflow order, and the single source of truth for both field creation and repair of an existing field.
+const STATUS_OPTIONS: [(&str, &str, &str); 6] = [
+    ("Backlog", "BLUE", ""),
+    ("Todo", "GREEN", "This item hasn't been started"),
+    ("In Progress", "YELLOW", "This is actively being worked on"),
+    (
+        "Needs Decision",
+        "ORANGE",
+        "Agent stopped, waiting on a human answer",
+    ),
+    (
+        "In Review",
+        "BLUE",
+        "Draft PR open, waiting on human promotion and merge",
+    ),
+    ("Done", "PURPLE", "This has been completed"),
+];
+
+/// Merge the canonical options into what the board already has.
+///
+/// Existing entries are returned verbatim, IDs included, because `updateProjectV2Field` replaces the whole option list and dropping an ID would clear that status from every item currently assigned to it. Missing options are appended rather than inserted in canonical order, so a board carrying custom statuses keeps the arrangement its owner chose.
+fn merge_status_options(existing: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<String>) {
+    let mut merged: Vec<serde_json::Value> = existing
+        .iter()
+        .map(|o| {
+            json!({
+                "id": o["id"].as_str().unwrap_or_default(),
+                "name": o["name"].as_str().unwrap_or_default(),
+                "color": o["color"].as_str().unwrap_or("GRAY"),
+                "description": o["description"].as_str().unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    let present: Vec<String> = existing
+        .iter()
+        .filter_map(|o| o["name"].as_str().map(|s| s.to_lowercase()))
+        .collect();
+
+    let mut added = Vec::new();
+    for (name, color, description) in STATUS_OPTIONS {
+        if present.contains(&name.to_lowercase()) {
+            continue;
+        }
+        merged.push(json!({
+            "name": name,
+            "color": color,
+            "description": description,
+        }));
+        added.push(name.to_string());
+    }
+
+    (merged, added)
+}
+
+fn repair_status_options(fields: &[serde_json::Value], field_id: &str) -> Result<()> {
+    let field = match fields.iter().find(|f| f["id"].as_str() == Some(field_id)) {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+
+    let existing = field["options"].as_array().cloned().unwrap_or_default();
+    let (merged, added) = merge_status_options(&existing);
+
+    if added.is_empty() {
+        return Ok(());
+    }
+
+    let mutation = r#"
+        mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+            updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options }) {
+                projectV2Field { ... on ProjectV2SingleSelectField { id } }
+            }
+        }
+    "#;
+
+    graphql(mutation, json!({ "fieldId": field_id, "options": merged }))?;
+
+    println!(
+        "  {} Added missing status options: {}",
+        "✓".green(),
+        added.join(", ")
+    );
+    Ok(())
+}
+
 fn create_status_field(project_id: &str) -> Result<String> {
     let mutation = r#"
         mutation($projectId: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
@@ -281,12 +363,14 @@ fn create_status_field(project_id: &str) -> Result<String> {
         json!({
             "projectId": project_id,
             "name": "Status",
-            "options": [
-                { "name": "Backlog", "color": "BLUE", "description": "" },
-                { "name": "Todo", "color": "GREEN", "description": "This item hasn't been started" },
-                { "name": "In Progress", "color": "YELLOW", "description": "This is actively being worked on" },
-                { "name": "Done", "color": "PURPLE", "description": "This has been completed" },
-            ],
+            "options": STATUS_OPTIONS
+                .iter()
+                .map(|(name, color, description)| json!({
+                    "name": name,
+                    "color": color,
+                    "description": description,
+                }))
+                .collect::<Vec<_>>(),
         }),
     )?;
 
@@ -295,9 +379,11 @@ fn create_status_field(project_id: &str) -> Result<String> {
         .context("Failed to create Status field")?
         .to_string();
 
+    let names: Vec<&str> = STATUS_OPTIONS.iter().map(|(n, _, _)| *n).collect();
     println!(
-        "  {} Created Status field (Backlog, Todo, In Progress, Done)",
-        "✓".green()
+        "  {} Created Status field ({})",
+        "✓".green(),
+        names.join(", ")
     );
     Ok(field_id)
 }
@@ -400,35 +486,6 @@ fn create_points_field(project_id: &str) -> Result<String> {
     Ok(field_id)
 }
 
-fn warn_missing_status_options(fields: &[serde_json::Value], field_id: &str) {
-    let required = ["backlog", "todo", "in progress", "done"];
-
-    let field = match fields.iter().find(|f| f["id"].as_str() == Some(field_id)) {
-        Some(f) => f,
-        None => return,
-    };
-
-    let existing_opts = field["options"].as_array().cloned().unwrap_or_default();
-    let existing_names: Vec<String> = existing_opts
-        .iter()
-        .filter_map(|o| o["name"].as_str().map(|s| s.to_lowercase()))
-        .collect();
-
-    let missing: Vec<&&str> = required
-        .iter()
-        .filter(|name| !existing_names.contains(&name.to_lowercase()))
-        .collect();
-
-    if !missing.is_empty() {
-        let names: Vec<&str> = missing.iter().map(|n| **n).collect();
-        println!(
-            "  {} Missing status options: {}. Add them manually in your GitHub Project settings.",
-            "⚠".yellow(),
-            names.join(", ")
-        );
-    }
-}
-
 fn print_field_options(fields: &[serde_json::Value], name: &str) {
     if let Some(field) = fields.iter().find(|f| {
         f["name"]
@@ -489,4 +546,105 @@ fn detect_owner_repo() -> Result<(String, String)> {
     };
 
     Ok((owner, repo))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opt(id: &str, name: &str) -> serde_json::Value {
+        json!({ "id": id, "name": name, "color": "GRAY", "description": "" })
+    }
+
+    fn names(options: &[serde_json::Value]) -> Vec<String> {
+        options
+            .iter()
+            .map(|o| o["name"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn canonical_list_is_in_workflow_order() {
+        let order: Vec<&str> = STATUS_OPTIONS.iter().map(|(n, _, _)| *n).collect();
+        assert_eq!(
+            order,
+            vec![
+                "Backlog",
+                "Todo",
+                "In Progress",
+                "Needs Decision",
+                "In Review",
+                "Done"
+            ]
+        );
+    }
+
+    #[test]
+    fn board_missing_the_autopilot_statuses_gets_them_appended() {
+        let existing = vec![opt("a", "Todo"), opt("b", "In Progress"), opt("c", "Done")];
+        let (merged, added) = merge_status_options(&existing);
+        assert_eq!(added, vec!["Backlog", "Needs Decision", "In Review"]);
+        assert_eq!(
+            names(&merged),
+            vec![
+                "Todo",
+                "In Progress",
+                "Done",
+                "Backlog",
+                "Needs Decision",
+                "In Review"
+            ]
+        );
+    }
+
+    #[test]
+    fn existing_option_ids_survive_a_merge() {
+        let existing = vec![opt("keep-me", "Todo"), opt("keep-me-too", "Done")];
+        let (merged, _) = merge_status_options(&existing);
+        assert_eq!(merged[0]["id"], "keep-me");
+        assert_eq!(merged[1]["id"], "keep-me-too");
+    }
+
+    #[test]
+    fn appended_options_carry_no_id() {
+        let existing = vec![opt("a", "Todo")];
+        let (merged, _) = merge_status_options(&existing);
+        let appended = merged.iter().find(|o| o["name"] == "In Review").unwrap();
+        assert!(appended.get("id").is_none());
+    }
+
+    #[test]
+    fn merging_a_complete_board_changes_nothing() {
+        let existing: Vec<serde_json::Value> = STATUS_OPTIONS
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _, _))| opt(&format!("id{i}"), name))
+            .collect();
+        let (merged, added) = merge_status_options(&existing);
+        assert!(added.is_empty());
+        assert_eq!(names(&merged), names(&existing));
+    }
+
+    #[test]
+    fn custom_statuses_survive_a_merge() {
+        let existing = vec![opt("a", "Todo"), opt("b", "Blocked On Legal")];
+        let (merged, _) = merge_status_options(&existing);
+        assert!(names(&merged).contains(&"Blocked On Legal".to_string()));
+    }
+
+    #[test]
+    fn existing_order_is_preserved() {
+        let existing = vec![opt("a", "Done"), opt("b", "Todo")];
+        let (merged, _) = merge_status_options(&existing);
+        assert_eq!(names(&merged)[0], "Done");
+        assert_eq!(names(&merged)[1], "Todo");
+    }
+
+    #[test]
+    fn option_names_match_case_insensitively() {
+        let existing = vec![opt("a", "TODO"), opt("b", "needs decision")];
+        let (_, added) = merge_status_options(&existing);
+        assert!(!added.contains(&"Todo".to_string()));
+        assert!(!added.contains(&"Needs Decision".to_string()));
+    }
 }

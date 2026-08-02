@@ -22,6 +22,11 @@ pub struct IssueNode {
     pub is_epic: bool,
 }
 
+/// Allowlist, not a denylist: a status this function does not recognise must never be claimable, because autonomous agents pick work off this predicate and a status added to the board later would otherwise become claimable by default.
+pub fn status_is_claimable(status: &str) -> bool {
+    status.eq_ignore_ascii_case("todo")
+}
+
 #[derive(Debug)]
 pub struct IssueGraph {
     pub nodes: HashMap<u64, IssueNode>,
@@ -337,11 +342,7 @@ impl IssueGraph {
     /// Find the critical path — the longest weighted chain through the graph.
     /// If `scope` is Some, only issues within the scope are considered.
     /// Returns the path as a vec of issue numbers (from start to end).
-    pub fn critical_path(
-        &self,
-        use_points: bool,
-        scope: Option<&HashSet<u64>>,
-    ) -> (Vec<u64>, f64) {
+    pub fn critical_path(&self, use_points: bool, scope: Option<&HashSet<u64>>) -> (Vec<u64>, f64) {
         let mut cache = HashMap::new();
         let mut visiting = HashSet::new();
 
@@ -364,22 +365,19 @@ impl IssueGraph {
         let mut path = vec![start];
         let mut current = start;
         loop {
-            let next = self
-                .blocking
-                .get(&current)
-                .and_then(|deps| {
-                    deps.iter()
-                        .filter(|d| cache.contains_key(d))
-                        .filter(|d| scope.map(|s| s.contains(d)).unwrap_or(true))
-                        .max_by(|a, b| {
-                            cache
-                                .get(a)
-                                .unwrap()
-                                .partial_cmp(cache.get(b).unwrap())
-                                .unwrap()
-                        })
-                        .copied()
-                });
+            let next = self.blocking.get(&current).and_then(|deps| {
+                deps.iter()
+                    .filter(|d| cache.contains_key(d))
+                    .filter(|d| scope.map(|s| s.contains(d)).unwrap_or(true))
+                    .max_by(|a, b| {
+                        cache
+                            .get(a)
+                            .unwrap()
+                            .partial_cmp(cache.get(b).unwrap())
+                            .unwrap()
+                    })
+                    .copied()
+            });
 
             match next {
                 Some(n) => {
@@ -424,18 +422,14 @@ impl IssueGraph {
         }
     }
 
-    /// Check if an issue is ready (unblocked, open, not in progress, not an epic).
+    /// Check if an issue is ready (unblocked, open, Todo, not an epic).
     pub fn is_ready(&self, number: u64) -> bool {
         let node = match self.nodes.get(&number) {
             Some(n) => n,
             None => return false,
         };
 
-        // Skip in progress, backlog, done
-        if node.status.eq_ignore_ascii_case("in progress")
-            || node.status.eq_ignore_ascii_case("backlog")
-            || node.status.eq_ignore_ascii_case("done")
-        {
+        if !status_is_claimable(&node.status) {
             return false;
         }
 
@@ -472,12 +466,7 @@ impl IssueGraph {
         result
     }
 
-    fn collect_descendants_depth(
-        &self,
-        number: u64,
-        depth: usize,
-        visited: &mut HashSet<u64>,
-    ) {
+    fn collect_descendants_depth(&self, number: u64, depth: usize, visited: &mut HashSet<u64>) {
         if depth == 0 || !visited.insert(number) {
             return;
         }
@@ -486,5 +475,113 @@ impl IssueGraph {
                 self.collect_descendants_depth(dep, depth - 1, visited);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(number: u64, status: &str) -> IssueNode {
+        IssueNode {
+            number,
+            title: format!("issue {number}"),
+            priority: "P2".to_string(),
+            points: None,
+            status: status.to_string(),
+            assignees: Vec::new(),
+            blocked_by: Vec::new(),
+            sub_issues: Vec::new(),
+            is_epic: false,
+        }
+    }
+
+    fn graph_of(nodes: Vec<IssueNode>) -> IssueGraph {
+        let mut blocked_by: HashMap<u64, HashSet<u64>> = HashMap::new();
+        let mut blocking: HashMap<u64, HashSet<u64>> = HashMap::new();
+        for n in &nodes {
+            for &dep in &n.blocked_by {
+                blocked_by.entry(n.number).or_default().insert(dep);
+                blocking.entry(dep).or_default().insert(n.number);
+            }
+        }
+        IssueGraph {
+            nodes: nodes.into_iter().map(|n| (n.number, n)).collect(),
+            blocked_by,
+            blocking,
+            parent_of: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn todo_status_is_claimable() {
+        assert!(status_is_claimable("Todo"));
+        assert!(status_is_claimable("todo"));
+    }
+
+    #[test]
+    fn needs_decision_status_is_not_claimable() {
+        assert!(!status_is_claimable("Needs Decision"));
+    }
+
+    #[test]
+    fn in_review_status_is_not_claimable() {
+        assert!(!status_is_claimable("In Review"));
+    }
+
+    #[test]
+    fn unrecognised_status_is_not_claimable() {
+        assert!(!status_is_claimable("Blocked On Legal"));
+        assert!(!status_is_claimable(""));
+    }
+
+    #[test]
+    fn existing_statuses_remain_unclaimable() {
+        assert!(!status_is_claimable("In Progress"));
+        assert!(!status_is_claimable("Backlog"));
+        assert!(!status_is_claimable("Done"));
+    }
+
+    #[test]
+    fn issue_parked_on_needs_decision_is_not_ready() {
+        let g = graph_of(vec![node(1, "Needs Decision")]);
+        assert!(!g.is_ready(1));
+    }
+
+    #[test]
+    fn issue_awaiting_review_is_not_ready() {
+        let g = graph_of(vec![node(1, "In Review")]);
+        assert!(!g.is_ready(1));
+    }
+
+    #[test]
+    fn unblocked_todo_issue_is_ready() {
+        let g = graph_of(vec![node(1, "Todo")]);
+        assert!(g.is_ready(1));
+    }
+
+    #[test]
+    fn todo_issue_with_open_blocker_is_not_ready() {
+        let mut blocked = node(2, "Todo");
+        blocked.blocked_by = vec![1];
+        let g = graph_of(vec![node(1, "Todo"), blocked]);
+        assert!(!g.is_ready(2));
+    }
+
+    #[test]
+    fn epic_with_open_sub_issues_is_not_ready() {
+        let mut epic = node(1, "Todo");
+        epic.is_epic = true;
+        epic.sub_issues = vec![2];
+        let g = graph_of(vec![epic, node(2, "Todo")]);
+        assert!(!g.is_ready(1));
+    }
+
+    #[test]
+    fn epic_whose_sub_issues_all_closed_is_ready() {
+        let mut epic = node(1, "Todo");
+        epic.is_epic = true;
+        let g = graph_of(vec![epic]);
+        assert!(g.is_ready(1));
     }
 }

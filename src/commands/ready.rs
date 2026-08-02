@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::config::find_config;
 use crate::gh::graphql;
+use crate::graph::status_is_claimable;
 use crate::util::truncate;
 
 pub fn run() -> Result<()> {
@@ -22,6 +23,9 @@ pub fn run() -> Result<()> {
                                     number title state
                                     assignees(first: 3) { nodes { login } }
                                     blockedBy(first: 5) {
+                                        nodes { state }
+                                    }
+                                    subIssues(first: 50) {
                                         nodes { state }
                                     }
                                 }
@@ -45,12 +49,15 @@ pub fn run() -> Result<()> {
     let mut ready = Vec::new();
 
     loop {
-        let data = graphql(query, json!({
-            "owner": config.owner,
-            "repo": config.repo,
-            "number": config.project_number,
-            "cursor": cursor,
-        }))?;
+        let data = graphql(
+            query,
+            json!({
+                "owner": config.owner,
+                "repo": config.repo,
+                "number": config.project_number,
+                "cursor": cursor,
+            }),
+        )?;
 
         let items_node = &data["repository"]["projectV2"]["items"];
         let nodes = items_node["nodes"].as_array().cloned().unwrap_or_default();
@@ -64,7 +71,6 @@ pub fn run() -> Result<()> {
                 continue;
             }
 
-            // Check project status — skip in_progress
             let mut item_status = String::new();
             for fv in item["fieldValues"]["nodes"].as_array().unwrap_or(&vec![]) {
                 let field_name = fv["field"]["name"].as_str().unwrap_or("");
@@ -73,10 +79,17 @@ pub fn run() -> Result<()> {
                 }
             }
 
-            if item_status.eq_ignore_ascii_case("in progress")
-                || item_status.eq_ignore_ascii_case("backlog")
-                || item_status.eq_ignore_ascii_case("done")
-            {
+            if !status_is_claimable(&item_status) {
+                continue;
+            }
+
+            // Epics are containers, not claimable work, but one whose sub-issues have all closed is claimable so it can be wrapped up.
+            let has_open_sub_issue = content["subIssues"]["nodes"]
+                .as_array()
+                .map(|subs| subs.iter().any(|s| s["state"].as_str() == Some("OPEN")))
+                .unwrap_or(false);
+
+            if has_open_sub_issue {
                 continue;
             }
 
@@ -94,16 +107,24 @@ pub fn run() -> Result<()> {
             let title = content["title"].as_str().unwrap_or("?").to_string();
             let assignees: Vec<String> = content["assignees"]["nodes"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|u| u["login"].as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|u| u["login"].as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             ready.push((number, title, assignees));
         }
 
-        let has_next = items_node["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false);
+        let has_next = items_node["pageInfo"]["hasNextPage"]
+            .as_bool()
+            .unwrap_or(false);
         if !has_next {
             break;
         }
-        cursor = items_node["pageInfo"]["endCursor"].as_str().map(String::from);
+        cursor = items_node["pageInfo"]["endCursor"]
+            .as_str()
+            .map(String::from);
     }
 
     if ready.is_empty() {
@@ -111,7 +132,10 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("{} ready issues (unblocked, not in progress):", ready.len().to_string().green().bold());
+    println!(
+        "{} ready issues (unblocked, Todo, not an epic):",
+        ready.len().to_string().green().bold()
+    );
     println!("{}", "─".repeat(60).dimmed());
     for (num, title, assignees) in ready {
         let trunc = truncate(&title, 52);

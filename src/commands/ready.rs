@@ -3,11 +3,12 @@ use colored::Colorize;
 use serde_json::json;
 
 use crate::config::find_config;
+use crate::eligibility;
 use crate::gh::graphql;
 use crate::graph::status_is_claimable;
 use crate::util::truncate;
 
-pub fn run() -> Result<()> {
+pub fn run(autopilot: bool, explain: bool) -> Result<()> {
     let (config, _) = find_config()?;
 
     // Query issues via the project so we can check status field
@@ -20,7 +21,8 @@ pub fn run() -> Result<()> {
                         nodes {
                             content {
                                 ... on Issue {
-                                    number title state
+                                    number title state body
+                                    labels(first: 20) { nodes { name } }
                                     assignees(first: 3) { nodes { login } }
                                     blockedBy(first: 5) {
                                         nodes { state }
@@ -47,6 +49,7 @@ pub fn run() -> Result<()> {
 
     let mut cursor: Option<String> = None;
     let mut ready = Vec::new();
+    let mut skipped: Vec<(u64, String, String)> = Vec::new();
 
     loop {
         let data = graphql(
@@ -79,7 +82,11 @@ pub fn run() -> Result<()> {
                 }
             }
 
+            let number = content["number"].as_u64().unwrap_or(0);
+            let title = content["title"].as_str().unwrap_or("?").to_string();
+
             if !status_is_claimable(&item_status) {
+                skipped.push((number, title, format!("status is {item_status}")));
                 continue;
             }
 
@@ -90,6 +97,7 @@ pub fn run() -> Result<()> {
                 .unwrap_or(false);
 
             if has_open_sub_issue {
+                skipped.push((number, title, "epic with open sub-issues".to_string()));
                 continue;
             }
 
@@ -100,11 +108,27 @@ pub fn run() -> Result<()> {
                 .unwrap_or(false);
 
             if has_open_blocker {
+                skipped.push((number, title, "blocked by an open issue".to_string()));
                 continue;
             }
 
-            let number = content["number"].as_u64().unwrap_or(0);
-            let title = content["title"].as_str().unwrap_or("?").to_string();
+            if autopilot {
+                let labels: Vec<String> = content["labels"]["nodes"]
+                    .as_array()
+                    .map(|l| {
+                        l.iter()
+                            .filter_map(|x| x["name"].as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let body = content["body"].as_str().unwrap_or("");
+
+                if let Err(reason) = eligibility::evaluate(&labels, body) {
+                    skipped.push((number, title, reason.reason()));
+                    continue;
+                }
+            }
+
             let assignees: Vec<String> = content["assignees"]["nodes"]
                 .as_array()
                 .map(|a| {
@@ -127,24 +151,39 @@ pub fn run() -> Result<()> {
             .map(String::from);
     }
 
+    let scope = if autopilot {
+        "unblocked, Todo, not an epic, autopilot-eligible"
+    } else {
+        "unblocked, Todo, not an epic"
+    };
+
     if ready.is_empty() {
         println!("{}", "No ready issues.".dimmed());
-        return Ok(());
+    } else {
+        println!(
+            "{} ready issues ({scope}):",
+            ready.len().to_string().green().bold()
+        );
+        println!("{}", "─".repeat(60).dimmed());
+        for (num, title, assignees) in ready {
+            let trunc = truncate(&title, 52);
+            let assignee_str = if assignees.is_empty() {
+                "unassigned".dimmed().to_string()
+            } else {
+                assignees.join(", ")
+            };
+            println!("  #{:<6} {:<54} {}", num, trunc, assignee_str.dimmed());
+        }
     }
 
-    println!(
-        "{} ready issues (unblocked, Todo, not an epic):",
-        ready.len().to_string().green().bold()
-    );
-    println!("{}", "─".repeat(60).dimmed());
-    for (num, title, assignees) in ready {
-        let trunc = truncate(&title, 52);
-        let assignee_str = if assignees.is_empty() {
-            "unassigned".dimmed().to_string()
-        } else {
-            assignees.join(", ")
-        };
-        println!("  #{:<6} {:<54} {}", num, trunc, assignee_str.dimmed());
+    if explain {
+        println!();
+        println!("{} skipped:", skipped.len().to_string().yellow().bold());
+        println!("{}", "─".repeat(60).dimmed());
+        for (num, title, reason) in skipped {
+            let trunc = truncate(&title, 42);
+            println!("  #{:<6} {:<44} {}", num, trunc, reason.dimmed());
+        }
     }
 
     Ok(())

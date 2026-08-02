@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod eligibility;
 mod gh;
 mod graph;
 mod util;
@@ -93,6 +94,9 @@ NOTES:
         /// Effort estimate (use Fibonacci: 1, 2, 3, 5, 8, 13)
         #[arg(long)]
         points: Option<f64>,
+        /// Add the `autopilot` label, marking the issue claimable by an autonomous agent
+        #[arg(long)]
+        autopilot: bool,
     },
 
     /// Update status, priority, or assignee on an issue
@@ -169,9 +173,18 @@ SEE ALSO: glb tree — recursive sub-tree view with status icons.")]
     /// Show unblocked open issues (ready to work)
     #[command(after_help = "EXAMPLES:
   glb ready                         Flat list of unblocked, unclaimed issues
+  glb ready --autopilot             Only issues an autonomous agent may claim
+  glb ready --autopilot --explain   ...and why each other issue was skipped
 
 TIP: For scored recommendations + parallel-agent splits, use `glb next`.")]
-    Ready,
+    Ready {
+        /// Restrict to issues labelled `autopilot` that have `## Acceptance criteria` and `## Tests`
+        #[arg(long)]
+        autopilot: bool,
+        /// Print one line per skipped issue explaining why it was not selected
+        #[arg(long)]
+        explain: bool,
+    },
 
     /// Show all blocked open issues
     #[command(after_help = "EXAMPLES:
@@ -391,12 +404,16 @@ fn main() -> Result<()> {
         Command::Create {
             title,
             body,
-            label,
+            mut label,
             assignee,
             priority,
             status,
             points,
+            autopilot,
         } => {
+            if autopilot && !label.iter().any(|l| l == eligibility::AUTOPILOT_LABEL) {
+                label.push(eligibility::AUTOPILOT_LABEL.to_string());
+            }
             commands::create::run(title, body, label, assignee, priority, status, points)?;
         }
         Command::Update {
@@ -409,7 +426,9 @@ fn main() -> Result<()> {
             claim,
             points,
         } => {
-            commands::update::run(number, title, body, status, priority, assignee, claim, points)?;
+            commands::update::run(
+                number, title, body, status, priority, assignee, claim, points,
+            )?;
         }
         Command::Close { number, comment } => {
             commands::close::run(number, comment)?;
@@ -430,8 +449,8 @@ fn main() -> Result<()> {
             SubAction::Remove { parent, child } => commands::sub::remove(parent, child)?,
             SubAction::List { parent } => commands::sub::list(parent)?,
         },
-        Command::Ready => {
-            commands::ready::run()?;
+        Command::Ready { autopilot, explain } => {
+            commands::ready::run(autopilot, explain)?;
         }
         Command::Blocked => {
             commands::blocked::run()?;

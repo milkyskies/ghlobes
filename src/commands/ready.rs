@@ -21,7 +21,7 @@ pub fn run(autopilot: bool, explain: bool) -> Result<()> {
                         nodes {
                             content {
                                 ... on Issue {
-                                    number title state body
+                                    number title state
                                     labels(first: 20) { nodes { name } }
                                     assignees(first: 3) { nodes { login } }
                                     blockedBy(first: 5) {
@@ -121,9 +121,7 @@ pub fn run(autopilot: bool, explain: bool) -> Result<()> {
                             .collect()
                     })
                     .unwrap_or_default();
-                let body = content["body"].as_str().unwrap_or("");
-
-                if let Err(reason) = eligibility::evaluate(&labels, body) {
+                if let Err(reason) = eligibility::evaluate(&labels) {
                     skipped.push((number, title, reason.reason()));
                     continue;
                 }

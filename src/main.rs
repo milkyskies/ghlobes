@@ -178,7 +178,7 @@ SEE ALSO: glb tree — recursive sub-tree view with status icons.")]
 
 TIP: For scored recommendations + parallel-agent splits, use `glb next`.")]
     Ready {
-        /// Restrict to issues labelled `autopilot` that have `## Acceptance criteria` and `## Tests`
+        /// Restrict to issues labelled `autopilot`
         #[arg(long)]
         autopilot: bool,
         /// Print one line per skipped issue explaining why it was not selected

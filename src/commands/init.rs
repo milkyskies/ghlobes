@@ -276,41 +276,88 @@ const STATUS_OPTIONS: [(&str, &str, &str); 6] = [
     ("Done", "PURPLE", "This has been completed"),
 ];
 
-/// Merge the canonical options into what the board already has.
+fn is_canonical(name: &str) -> bool {
+    STATUS_OPTIONS
+        .iter()
+        .any(|(canonical, _, _)| canonical.eq_ignore_ascii_case(name))
+}
+
+fn option_name(option: &serde_json::Value) -> &str {
+    option["name"].as_str().unwrap_or_default()
+}
+
+/// Merge the canonical options into what the board already has, in workflow order.
 ///
-/// Existing entries are returned verbatim, IDs included, because `updateProjectV2Field` replaces the whole option list and dropping an ID would clear that status from every item currently assigned to it. Missing options are appended rather than inserted in canonical order, so a board carrying custom statuses keeps the arrangement its owner chose.
+/// Existing entries keep their IDs, because `updateProjectV2Field` replaces the whole option list and dropping an ID would clear that status from every item currently assigned to it.
+///
+/// Canonical options are ordered relative to each other by `STATUS_OPTIONS`, so a board that GitHub seeded with Todo / In Progress / Done reads as work actually moves once the autopilot statuses arrive. A custom status the owner added is not reshuffled into that sequence: it stays anchored directly after whichever canonical option preceded it, so the arrangement its owner chose survives.
 fn merge_status_options(existing: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<String>) {
-    let mut merged: Vec<serde_json::Value> = existing
+    let normalized: Vec<serde_json::Value> = existing
         .iter()
         .map(|o| {
             json!({
                 "id": o["id"].as_str().unwrap_or_default(),
-                "name": o["name"].as_str().unwrap_or_default(),
+                "name": option_name(o),
                 "color": o["color"].as_str().unwrap_or("GRAY"),
                 "description": o["description"].as_str().unwrap_or_default(),
             })
         })
         .collect();
 
-    let present: Vec<String> = existing
-        .iter()
-        .filter_map(|o| o["name"].as_str().map(|s| s.to_lowercase()))
-        .collect();
-
     let mut added = Vec::new();
+
+    // Canonical options in workflow order, reusing the board's own entry wherever it already has one.
+    let mut merged: Vec<serde_json::Value> = Vec::new();
     for (name, color, description) in STATUS_OPTIONS {
-        if present.contains(&name.to_lowercase()) {
+        match normalized
+            .iter()
+            .find(|o| option_name(o).eq_ignore_ascii_case(name))
+        {
+            Some(present) => merged.push(present.clone()),
+            None => {
+                merged.push(json!({
+                    "name": name,
+                    "color": color,
+                    "description": description,
+                }));
+                added.push(name.to_string());
+            }
+        }
+    }
+
+    // Each custom status goes back directly after the canonical option it followed on the original board, so its owner's placement is preserved even though the canonical ones moved around it.
+    let mut anchor: Option<String> = None;
+    for option in &normalized {
+        let name = option_name(option);
+
+        if is_canonical(name) {
+            anchor = Some(name.to_string());
             continue;
         }
-        merged.push(json!({
-            "name": name,
-            "color": color,
-            "description": description,
-        }));
-        added.push(name.to_string());
+
+        let at = match &anchor {
+            Some(after) => merged
+                .iter()
+                .position(|o| option_name(o).eq_ignore_ascii_case(after))
+                .map(|index| index + 1)
+                .unwrap_or(merged.len()),
+            None => 0,
+        };
+
+        merged.insert(at, option.clone());
+        anchor = Some(name.to_string());
     }
 
     (merged, added)
+}
+
+/// Whether the board's option list already matches the merged one, name for name and in the same order.
+fn options_match(existing: &[serde_json::Value], merged: &[serde_json::Value]) -> bool {
+    existing.len() == merged.len()
+        && existing
+            .iter()
+            .zip(merged)
+            .all(|(a, b)| option_name(a).eq_ignore_ascii_case(option_name(b)))
 }
 
 fn repair_status_options(fields: &[serde_json::Value], field_id: &str) -> Result<()> {
@@ -322,7 +369,8 @@ fn repair_status_options(fields: &[serde_json::Value], field_id: &str) -> Result
     let existing = field["options"].as_array().cloned().unwrap_or_default();
     let (merged, added) = merge_status_options(&existing);
 
-    if added.is_empty() {
+    // A board can hold every option and still be out of order, so completeness alone is not the test for whether there is work to do.
+    if options_match(&existing, &merged) {
         return Ok(());
     }
 
@@ -336,11 +384,19 @@ fn repair_status_options(fields: &[serde_json::Value], field_id: &str) -> Result
 
     graphql(mutation, json!({ "fieldId": field_id, "options": merged }))?;
 
-    println!(
-        "  {} Added missing status options: {}",
-        "✓".green(),
-        added.join(", ")
-    );
+    if added.is_empty() {
+        println!(
+            "  {} Reordered status options into workflow order",
+            "✓".green()
+        );
+    } else {
+        println!(
+            "  {} Added missing status options: {}",
+            "✓".green(),
+            added.join(", ")
+        );
+    }
+
     Ok(())
 }
 
@@ -580,37 +636,109 @@ mod tests {
     }
 
     #[test]
-    fn board_missing_the_autopilot_statuses_gets_them_appended() {
+    fn a_github_default_board_lands_in_workflow_order() {
         let existing = vec![opt("a", "Todo"), opt("b", "In Progress"), opt("c", "Done")];
         let (merged, added) = merge_status_options(&existing);
         assert_eq!(added, vec!["Backlog", "Needs Decision", "In Review"]);
         assert_eq!(
             names(&merged),
             vec![
+                "Backlog",
                 "Todo",
                 "In Progress",
-                "Done",
-                "Backlog",
                 "Needs Decision",
-                "In Review"
+                "In Review",
+                "Done"
             ]
         );
+    }
+
+    #[test]
+    fn a_complete_board_in_the_wrong_order_is_reordered() {
+        let existing = vec![
+            opt("a", "Todo"),
+            opt("b", "In Progress"),
+            opt("c", "Done"),
+            opt("d", "Backlog"),
+            opt("e", "Needs Decision"),
+            opt("f", "In Review"),
+        ];
+        let (merged, added) = merge_status_options(&existing);
+        assert!(added.is_empty());
+        assert_eq!(
+            names(&merged),
+            vec![
+                "Backlog",
+                "Todo",
+                "In Progress",
+                "Needs Decision",
+                "In Review",
+                "Done"
+            ]
+        );
+    }
+
+    #[test]
+    fn reordering_alone_still_counts_as_work_to_do() {
+        let existing = vec![
+            opt("a", "Todo"),
+            opt("b", "In Progress"),
+            opt("c", "Done"),
+            opt("d", "Backlog"),
+            opt("e", "Needs Decision"),
+            opt("f", "In Review"),
+        ];
+        let (merged, _) = merge_status_options(&existing);
+        assert!(!options_match(&existing, &merged));
+    }
+
+    #[test]
+    fn a_custom_status_stays_after_the_option_it_followed() {
+        let existing = vec![
+            opt("a", "Todo"),
+            opt("b", "In Progress"),
+            opt("c", "Blocked On Legal"),
+            opt("d", "Done"),
+        ];
+        let (merged, _) = merge_status_options(&existing);
+        let merged_names = names(&merged);
+        let after = merged_names
+            .iter()
+            .position(|n| n == "In Progress")
+            .unwrap();
+        assert_eq!(merged_names[after + 1], "Blocked On Legal");
+    }
+
+    #[test]
+    fn a_custom_status_before_every_canonical_one_stays_at_the_front() {
+        let existing = vec![opt("a", "Triage"), opt("b", "Todo")];
+        let (merged, _) = merge_status_options(&existing);
+        assert_eq!(names(&merged)[0], "Triage");
     }
 
     #[test]
     fn existing_option_ids_survive_a_merge() {
         let existing = vec![opt("keep-me", "Todo"), opt("keep-me-too", "Done")];
         let (merged, _) = merge_status_options(&existing);
-        assert_eq!(merged[0]["id"], "keep-me");
-        assert_eq!(merged[1]["id"], "keep-me-too");
+        let find = |name: &str| {
+            merged
+                .iter()
+                .find(|o| o["name"] == name)
+                .unwrap()
+                .get("id")
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(find("Todo"), "keep-me");
+        assert_eq!(find("Done"), "keep-me-too");
     }
 
     #[test]
-    fn appended_options_carry_no_id() {
+    fn newly_added_options_carry_no_id() {
         let existing = vec![opt("a", "Todo")];
         let (merged, _) = merge_status_options(&existing);
-        let appended = merged.iter().find(|o| o["name"] == "In Review").unwrap();
-        assert!(appended.get("id").is_none());
+        let added = merged.iter().find(|o| o["name"] == "In Review").unwrap();
+        assert!(added.get("id").is_none());
     }
 
     #[test]
@@ -633,11 +761,14 @@ mod tests {
     }
 
     #[test]
-    fn existing_order_is_preserved() {
-        let existing = vec![opt("a", "Done"), opt("b", "Todo")];
+    fn a_board_already_in_canonical_order_needs_no_mutation() {
+        let existing: Vec<serde_json::Value> = STATUS_OPTIONS
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _, _))| opt(&format!("id{i}"), name))
+            .collect();
         let (merged, _) = merge_status_options(&existing);
-        assert_eq!(names(&merged)[0], "Done");
-        assert_eq!(names(&merged)[1], "Todo");
+        assert!(options_match(&existing, &merged));
     }
 
     #[test]

@@ -6,55 +6,28 @@ use std::io::{self, Write};
 use crate::config::{Config, write_config};
 use crate::gh::{gh, graphql};
 
-pub fn run(owner: Option<String>, repo: Option<String>, project_number: Option<u64>) -> Result<()> {
+pub fn run(
+    owner: Option<String>,
+    repo: Option<String>,
+    project_number: Option<u64>,
+    yes: bool,
+) -> Result<()> {
     let (owner, repo) = match (owner, repo) {
         (Some(o), Some(r)) => (o, r),
-        _ => detect_owner_repo()?,
+        _ => detect_owner_repo(yes)?,
     };
 
     println!("Setting up ghlobes for {}/{}", owner.bold(), repo.bold());
 
     let project_number = match project_number {
         Some(n) => n,
-        None => find_or_create_project(&owner, &repo)?,
+        None => find_or_create_project(&owner, &repo, yes)?,
     };
 
     println!("Fetching project fields for project #{project_number}...");
 
-    let query = r#"
-        query($owner: String!, $repo: String!, $number: Int!) {
-            repository(owner: $owner, name: $repo) {
-                projectV2(number: $number) {
-                    id
-                    fields(first: 30) {
-                        nodes {
-                            ... on ProjectV2SingleSelectField {
-                                id
-                                name
-                                options { id name color description }
-                            }
-                            ... on ProjectV2Field {
-                                id
-                                name
-                                dataType
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    "#;
-
-    let data = graphql(
-        query,
-        json!({ "owner": owner, "repo": repo, "number": project_number }),
-    )?;
-    let project = &data["repository"]["projectV2"];
-    let project_id = project["id"].as_str().context("No project ID")?.to_string();
-
-    let fields = project["fields"]["nodes"]
-        .as_array()
-        .context("No fields found on project")?;
+    let (project_id, fields) = fetch_project_fields(&owner, &repo, project_number)?;
+    let fields = fields.as_slice();
 
     // Find or create Status field
     let status_field_id = match find_field(fields, "status") {
@@ -93,9 +66,10 @@ pub fn run(owner: Option<String>, repo: Option<String>, project_number: Option<u
         }
     };
 
-    // Show current options
-    print_field_options(fields, "status");
-    print_field_options(fields, "priority");
+    // Re-read the board: the summary below would otherwise report the snapshot taken before this run repaired or created anything.
+    let (_, fields) = fetch_project_fields(&owner, &repo, project_number)?;
+    print_field_options(&fields, "status");
+    print_field_options(&fields, "priority");
 
     let config = Config {
         owner: owner.clone(),
@@ -116,6 +90,49 @@ pub fn run(owner: Option<String>, repo: Option<String>, project_number: Option<u
     Ok(())
 }
 
+fn fetch_project_fields(
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<(String, Vec<serde_json::Value>)> {
+    let query = r#"
+        query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+                projectV2(number: $number) {
+                    id
+                    fields(first: 30) {
+                        nodes {
+                            ... on ProjectV2SingleSelectField {
+                                id
+                                name
+                                options { id name color description }
+                            }
+                            ... on ProjectV2Field {
+                                id
+                                name
+                                dataType
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    "#;
+
+    let data = graphql(
+        query,
+        json!({ "owner": owner, "repo": repo, "number": number }),
+    )?;
+    let project = &data["repository"]["projectV2"];
+    let project_id = project["id"].as_str().context("No project ID")?.to_string();
+    let fields = project["fields"]["nodes"]
+        .as_array()
+        .context("No fields found on project")?
+        .clone();
+
+    Ok((project_id, fields))
+}
+
 fn prompt(message: &str) -> Result<String> {
     print!("{message}");
     io::stdout().flush()?;
@@ -124,7 +141,25 @@ fn prompt(message: &str) -> Result<String> {
     Ok(input.trim().to_string())
 }
 
-fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
+/// What `--yes` should do with the projects already linked to the repo.
+///
+/// One project is unambiguous, so it is reused. None means there is nothing to reuse and a fresh one is correct. Several is the only case a default cannot settle, and guessing there would silently attach the repo to the wrong board.
+fn unattended_project_choice(existing: &[u64]) -> Result<Option<u64>> {
+    match existing {
+        [] => Ok(None),
+        [only] => Ok(Some(*only)),
+        _ => {
+            let numbers: Vec<String> = existing.iter().map(|n| format!("#{n}")).collect();
+            anyhow::bail!(
+                "--yes cannot choose between {} projects ({}). Pass --project <number>.",
+                existing.len(),
+                numbers.join(", ")
+            )
+        }
+    }
+}
+
+fn find_or_create_project(owner: &str, repo: &str, yes: bool) -> Result<u64> {
     // Check for existing projects
     let query = r#"
         query($owner: String!, $repo: String!) {
@@ -139,6 +174,20 @@ fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
     let projects = data["repository"]["projectsV2"]["nodes"]
         .as_array()
         .context("Failed to query projects")?;
+
+    if yes {
+        let numbers: Vec<u64> = projects
+            .iter()
+            .filter_map(|p| p["number"].as_u64())
+            .collect();
+
+        if let Some(number) = unattended_project_choice(&numbers)? {
+            println!("Using project #{number}");
+            return Ok(number);
+        }
+
+        return create_project(owner, repo, repo.to_string());
+    }
 
     if !projects.is_empty() {
         println!("\nExisting projects on {owner}/{repo}:");
@@ -186,6 +235,10 @@ fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
         title
     };
 
+    create_project(owner, repo, title)
+}
+
+fn create_project(owner: &str, repo: &str, title: String) -> Result<u64> {
     // Get the owner node ID (needed for createProjectV2)
     let owner_query = r#"
         query($owner: String!) {
@@ -560,7 +613,7 @@ fn print_field_options(fields: &[serde_json::Value], name: &str) {
     }
 }
 
-fn detect_owner_repo() -> Result<(String, String)> {
+fn detect_owner_repo(yes: bool) -> Result<(String, String)> {
     if let Ok(out) = gh(&["repo", "view", "--json", "owner,name"]) {
         let json: serde_json::Value = serde_json::from_str(&out)?;
         let owner = json["owner"]["login"]
@@ -569,6 +622,12 @@ fn detect_owner_repo() -> Result<(String, String)> {
             .to_string();
         let name = json["name"].as_str().context("No repo name")?.to_string();
         return Ok((owner, name));
+    }
+
+    if yes {
+        anyhow::bail!(
+            "Not in a GitHub repo, so --yes has nothing to detect. Pass --owner <owner> --repo <repo>."
+        );
     }
 
     println!(
@@ -769,6 +828,26 @@ mod tests {
             .collect();
         let (merged, _) = merge_status_options(&existing);
         assert!(options_match(&existing, &merged));
+    }
+
+    #[test]
+    fn a_lone_project_is_reused_without_asking() {
+        assert_eq!(unattended_project_choice(&[7]).unwrap(), Some(7));
+    }
+
+    #[test]
+    fn no_projects_means_create_one() {
+        assert_eq!(unattended_project_choice(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn several_projects_is_the_one_case_yes_refuses_to_guess() {
+        let error = unattended_project_choice(&[7, 9]).unwrap_err().to_string();
+        assert!(
+            error.contains("--project"),
+            "should name the way out: {error}"
+        );
+        assert!(error.contains("#7"), "should list the candidates: {error}");
     }
 
     #[test]

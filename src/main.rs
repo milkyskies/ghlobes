@@ -47,6 +47,9 @@ enum Command {
         /// GitHub Project number
         #[arg(long, short = 'p')]
         project: Option<u64>,
+        /// Answer every prompt with its default, for unattended runs
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// List open issues with optional filters
@@ -388,8 +391,9 @@ fn main() -> Result<()> {
             owner,
             repo,
             project,
+            yes,
         } => {
-            commands::init::run(owner, repo, project)?;
+            commands::init::run(owner, repo, project, yes)?;
         }
         Command::List {
             status,

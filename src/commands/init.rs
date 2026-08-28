@@ -6,55 +6,28 @@ use std::io::{self, Write};
 use crate::config::{Config, write_config};
 use crate::gh::{gh, graphql};
 
-pub fn run(owner: Option<String>, repo: Option<String>, project_number: Option<u64>) -> Result<()> {
+pub fn run(
+    owner: Option<String>,
+    repo: Option<String>,
+    project_number: Option<u64>,
+    yes: bool,
+) -> Result<()> {
     let (owner, repo) = match (owner, repo) {
         (Some(o), Some(r)) => (o, r),
-        _ => detect_owner_repo()?,
+        _ => detect_owner_repo(yes)?,
     };
 
     println!("Setting up ghlobes for {}/{}", owner.bold(), repo.bold());
 
     let project_number = match project_number {
         Some(n) => n,
-        None => find_or_create_project(&owner, &repo)?,
+        None => find_or_create_project(&owner, &repo, yes)?,
     };
 
     println!("Fetching project fields for project #{project_number}...");
 
-    let query = r#"
-        query($owner: String!, $repo: String!, $number: Int!) {
-            repository(owner: $owner, name: $repo) {
-                projectV2(number: $number) {
-                    id
-                    fields(first: 30) {
-                        nodes {
-                            ... on ProjectV2SingleSelectField {
-                                id
-                                name
-                                options { id name color description }
-                            }
-                            ... on ProjectV2Field {
-                                id
-                                name
-                                dataType
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    "#;
-
-    let data = graphql(
-        query,
-        json!({ "owner": owner, "repo": repo, "number": project_number }),
-    )?;
-    let project = &data["repository"]["projectV2"];
-    let project_id = project["id"].as_str().context("No project ID")?.to_string();
-
-    let fields = project["fields"]["nodes"]
-        .as_array()
-        .context("No fields found on project")?;
+    let (project_id, fields) = fetch_project_fields(&owner, &repo, project_number)?;
+    let fields = fields.as_slice();
 
     // Find or create Status field
     let status_field_id = match find_field(fields, "status") {
@@ -93,9 +66,10 @@ pub fn run(owner: Option<String>, repo: Option<String>, project_number: Option<u
         }
     };
 
-    // Show current options
-    print_field_options(fields, "status");
-    print_field_options(fields, "priority");
+    // Re-read the board: the summary below would otherwise report the snapshot taken before this run repaired or created anything.
+    let (_, fields) = fetch_project_fields(&owner, &repo, project_number)?;
+    print_field_options(&fields, "status");
+    print_field_options(&fields, "priority");
 
     let config = Config {
         owner: owner.clone(),
@@ -116,6 +90,49 @@ pub fn run(owner: Option<String>, repo: Option<String>, project_number: Option<u
     Ok(())
 }
 
+fn fetch_project_fields(
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<(String, Vec<serde_json::Value>)> {
+    let query = r#"
+        query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+                projectV2(number: $number) {
+                    id
+                    fields(first: 30) {
+                        nodes {
+                            ... on ProjectV2SingleSelectField {
+                                id
+                                name
+                                options { id name color description }
+                            }
+                            ... on ProjectV2Field {
+                                id
+                                name
+                                dataType
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    "#;
+
+    let data = graphql(
+        query,
+        json!({ "owner": owner, "repo": repo, "number": number }),
+    )?;
+    let project = &data["repository"]["projectV2"];
+    let project_id = project["id"].as_str().context("No project ID")?.to_string();
+    let fields = project["fields"]["nodes"]
+        .as_array()
+        .context("No fields found on project")?
+        .clone();
+
+    Ok((project_id, fields))
+}
+
 fn prompt(message: &str) -> Result<String> {
     print!("{message}");
     io::stdout().flush()?;
@@ -124,7 +141,25 @@ fn prompt(message: &str) -> Result<String> {
     Ok(input.trim().to_string())
 }
 
-fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
+/// What `--yes` should do with the projects already linked to the repo.
+///
+/// One project is unambiguous, so it is reused. None means there is nothing to reuse and a fresh one is correct. Several is the only case a default cannot settle, and guessing there would silently attach the repo to the wrong board.
+fn unattended_project_choice(existing: &[u64]) -> Result<Option<u64>> {
+    match existing {
+        [] => Ok(None),
+        [only] => Ok(Some(*only)),
+        _ => {
+            let numbers: Vec<String> = existing.iter().map(|n| format!("#{n}")).collect();
+            anyhow::bail!(
+                "--yes cannot choose between {} projects ({}). Pass --project <number>.",
+                existing.len(),
+                numbers.join(", ")
+            )
+        }
+    }
+}
+
+fn find_or_create_project(owner: &str, repo: &str, yes: bool) -> Result<u64> {
     // Check for existing projects
     let query = r#"
         query($owner: String!, $repo: String!) {
@@ -139,6 +174,20 @@ fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
     let projects = data["repository"]["projectsV2"]["nodes"]
         .as_array()
         .context("Failed to query projects")?;
+
+    if yes {
+        let numbers: Vec<u64> = projects
+            .iter()
+            .filter_map(|p| p["number"].as_u64())
+            .collect();
+
+        if let Some(number) = unattended_project_choice(&numbers)? {
+            println!("Using project #{number}");
+            return Ok(number);
+        }
+
+        return create_project(owner, repo, repo.to_string());
+    }
 
     if !projects.is_empty() {
         println!("\nExisting projects on {owner}/{repo}:");
@@ -186,6 +235,10 @@ fn find_or_create_project(owner: &str, repo: &str) -> Result<u64> {
         title
     };
 
+    create_project(owner, repo, title)
+}
+
+fn create_project(owner: &str, repo: &str, title: String) -> Result<u64> {
     // Get the owner node ID (needed for createProjectV2)
     let owner_query = r#"
         query($owner: String!) {
@@ -276,41 +329,88 @@ const STATUS_OPTIONS: [(&str, &str, &str); 6] = [
     ("Done", "PURPLE", "This has been completed"),
 ];
 
-/// Merge the canonical options into what the board already has.
+fn is_canonical(name: &str) -> bool {
+    STATUS_OPTIONS
+        .iter()
+        .any(|(canonical, _, _)| canonical.eq_ignore_ascii_case(name))
+}
+
+fn option_name(option: &serde_json::Value) -> &str {
+    option["name"].as_str().unwrap_or_default()
+}
+
+/// Merge the canonical options into what the board already has, in workflow order.
 ///
-/// Existing entries are returned verbatim, IDs included, because `updateProjectV2Field` replaces the whole option list and dropping an ID would clear that status from every item currently assigned to it. Missing options are appended rather than inserted in canonical order, so a board carrying custom statuses keeps the arrangement its owner chose.
+/// Existing entries keep their IDs, because `updateProjectV2Field` replaces the whole option list and dropping an ID would clear that status from every item currently assigned to it.
+///
+/// Canonical options are ordered relative to each other by `STATUS_OPTIONS`, so a board that GitHub seeded with Todo / In Progress / Done reads as work actually moves once the autopilot statuses arrive. A custom status the owner added is not reshuffled into that sequence: it stays anchored directly after whichever canonical option preceded it, so the arrangement its owner chose survives.
 fn merge_status_options(existing: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<String>) {
-    let mut merged: Vec<serde_json::Value> = existing
+    let normalized: Vec<serde_json::Value> = existing
         .iter()
         .map(|o| {
             json!({
                 "id": o["id"].as_str().unwrap_or_default(),
-                "name": o["name"].as_str().unwrap_or_default(),
+                "name": option_name(o),
                 "color": o["color"].as_str().unwrap_or("GRAY"),
                 "description": o["description"].as_str().unwrap_or_default(),
             })
         })
         .collect();
 
-    let present: Vec<String> = existing
-        .iter()
-        .filter_map(|o| o["name"].as_str().map(|s| s.to_lowercase()))
-        .collect();
-
     let mut added = Vec::new();
+
+    // Canonical options in workflow order, reusing the board's own entry wherever it already has one.
+    let mut merged: Vec<serde_json::Value> = Vec::new();
     for (name, color, description) in STATUS_OPTIONS {
-        if present.contains(&name.to_lowercase()) {
+        match normalized
+            .iter()
+            .find(|o| option_name(o).eq_ignore_ascii_case(name))
+        {
+            Some(present) => merged.push(present.clone()),
+            None => {
+                merged.push(json!({
+                    "name": name,
+                    "color": color,
+                    "description": description,
+                }));
+                added.push(name.to_string());
+            }
+        }
+    }
+
+    // Each custom status goes back directly after the canonical option it followed on the original board, so its owner's placement is preserved even though the canonical ones moved around it.
+    let mut anchor: Option<String> = None;
+    for option in &normalized {
+        let name = option_name(option);
+
+        if is_canonical(name) {
+            anchor = Some(name.to_string());
             continue;
         }
-        merged.push(json!({
-            "name": name,
-            "color": color,
-            "description": description,
-        }));
-        added.push(name.to_string());
+
+        let at = match &anchor {
+            Some(after) => merged
+                .iter()
+                .position(|o| option_name(o).eq_ignore_ascii_case(after))
+                .map(|index| index + 1)
+                .unwrap_or(merged.len()),
+            None => 0,
+        };
+
+        merged.insert(at, option.clone());
+        anchor = Some(name.to_string());
     }
 
     (merged, added)
+}
+
+/// Whether the board's option list already matches the merged one, name for name and in the same order.
+fn options_match(existing: &[serde_json::Value], merged: &[serde_json::Value]) -> bool {
+    existing.len() == merged.len()
+        && existing
+            .iter()
+            .zip(merged)
+            .all(|(a, b)| option_name(a).eq_ignore_ascii_case(option_name(b)))
 }
 
 fn repair_status_options(fields: &[serde_json::Value], field_id: &str) -> Result<()> {
@@ -322,7 +422,8 @@ fn repair_status_options(fields: &[serde_json::Value], field_id: &str) -> Result
     let existing = field["options"].as_array().cloned().unwrap_or_default();
     let (merged, added) = merge_status_options(&existing);
 
-    if added.is_empty() {
+    // A board can hold every option and still be out of order, so completeness alone is not the test for whether there is work to do.
+    if options_match(&existing, &merged) {
         return Ok(());
     }
 
@@ -336,11 +437,19 @@ fn repair_status_options(fields: &[serde_json::Value], field_id: &str) -> Result
 
     graphql(mutation, json!({ "fieldId": field_id, "options": merged }))?;
 
-    println!(
-        "  {} Added missing status options: {}",
-        "✓".green(),
-        added.join(", ")
-    );
+    if added.is_empty() {
+        println!(
+            "  {} Reordered status options into workflow order",
+            "✓".green()
+        );
+    } else {
+        println!(
+            "  {} Added missing status options: {}",
+            "✓".green(),
+            added.join(", ")
+        );
+    }
+
     Ok(())
 }
 
@@ -504,7 +613,7 @@ fn print_field_options(fields: &[serde_json::Value], name: &str) {
     }
 }
 
-fn detect_owner_repo() -> Result<(String, String)> {
+fn detect_owner_repo(yes: bool) -> Result<(String, String)> {
     if let Ok(out) = gh(&["repo", "view", "--json", "owner,name"]) {
         let json: serde_json::Value = serde_json::from_str(&out)?;
         let owner = json["owner"]["login"]
@@ -513,6 +622,12 @@ fn detect_owner_repo() -> Result<(String, String)> {
             .to_string();
         let name = json["name"].as_str().context("No repo name")?.to_string();
         return Ok((owner, name));
+    }
+
+    if yes {
+        anyhow::bail!(
+            "Not in a GitHub repo, so --yes has nothing to detect. Pass --owner <owner> --repo <repo>."
+        );
     }
 
     println!(
@@ -580,37 +695,109 @@ mod tests {
     }
 
     #[test]
-    fn board_missing_the_autopilot_statuses_gets_them_appended() {
+    fn a_github_default_board_lands_in_workflow_order() {
         let existing = vec![opt("a", "Todo"), opt("b", "In Progress"), opt("c", "Done")];
         let (merged, added) = merge_status_options(&existing);
         assert_eq!(added, vec!["Backlog", "Needs Decision", "In Review"]);
         assert_eq!(
             names(&merged),
             vec![
+                "Backlog",
                 "Todo",
                 "In Progress",
-                "Done",
-                "Backlog",
                 "Needs Decision",
-                "In Review"
+                "In Review",
+                "Done"
             ]
         );
+    }
+
+    #[test]
+    fn a_complete_board_in_the_wrong_order_is_reordered() {
+        let existing = vec![
+            opt("a", "Todo"),
+            opt("b", "In Progress"),
+            opt("c", "Done"),
+            opt("d", "Backlog"),
+            opt("e", "Needs Decision"),
+            opt("f", "In Review"),
+        ];
+        let (merged, added) = merge_status_options(&existing);
+        assert!(added.is_empty());
+        assert_eq!(
+            names(&merged),
+            vec![
+                "Backlog",
+                "Todo",
+                "In Progress",
+                "Needs Decision",
+                "In Review",
+                "Done"
+            ]
+        );
+    }
+
+    #[test]
+    fn reordering_alone_still_counts_as_work_to_do() {
+        let existing = vec![
+            opt("a", "Todo"),
+            opt("b", "In Progress"),
+            opt("c", "Done"),
+            opt("d", "Backlog"),
+            opt("e", "Needs Decision"),
+            opt("f", "In Review"),
+        ];
+        let (merged, _) = merge_status_options(&existing);
+        assert!(!options_match(&existing, &merged));
+    }
+
+    #[test]
+    fn a_custom_status_stays_after_the_option_it_followed() {
+        let existing = vec![
+            opt("a", "Todo"),
+            opt("b", "In Progress"),
+            opt("c", "Blocked On Legal"),
+            opt("d", "Done"),
+        ];
+        let (merged, _) = merge_status_options(&existing);
+        let merged_names = names(&merged);
+        let after = merged_names
+            .iter()
+            .position(|n| n == "In Progress")
+            .unwrap();
+        assert_eq!(merged_names[after + 1], "Blocked On Legal");
+    }
+
+    #[test]
+    fn a_custom_status_before_every_canonical_one_stays_at_the_front() {
+        let existing = vec![opt("a", "Triage"), opt("b", "Todo")];
+        let (merged, _) = merge_status_options(&existing);
+        assert_eq!(names(&merged)[0], "Triage");
     }
 
     #[test]
     fn existing_option_ids_survive_a_merge() {
         let existing = vec![opt("keep-me", "Todo"), opt("keep-me-too", "Done")];
         let (merged, _) = merge_status_options(&existing);
-        assert_eq!(merged[0]["id"], "keep-me");
-        assert_eq!(merged[1]["id"], "keep-me-too");
+        let find = |name: &str| {
+            merged
+                .iter()
+                .find(|o| o["name"] == name)
+                .unwrap()
+                .get("id")
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(find("Todo"), "keep-me");
+        assert_eq!(find("Done"), "keep-me-too");
     }
 
     #[test]
-    fn appended_options_carry_no_id() {
+    fn newly_added_options_carry_no_id() {
         let existing = vec![opt("a", "Todo")];
         let (merged, _) = merge_status_options(&existing);
-        let appended = merged.iter().find(|o| o["name"] == "In Review").unwrap();
-        assert!(appended.get("id").is_none());
+        let added = merged.iter().find(|o| o["name"] == "In Review").unwrap();
+        assert!(added.get("id").is_none());
     }
 
     #[test]
@@ -633,11 +820,34 @@ mod tests {
     }
 
     #[test]
-    fn existing_order_is_preserved() {
-        let existing = vec![opt("a", "Done"), opt("b", "Todo")];
+    fn a_board_already_in_canonical_order_needs_no_mutation() {
+        let existing: Vec<serde_json::Value> = STATUS_OPTIONS
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _, _))| opt(&format!("id{i}"), name))
+            .collect();
         let (merged, _) = merge_status_options(&existing);
-        assert_eq!(names(&merged)[0], "Done");
-        assert_eq!(names(&merged)[1], "Todo");
+        assert!(options_match(&existing, &merged));
+    }
+
+    #[test]
+    fn a_lone_project_is_reused_without_asking() {
+        assert_eq!(unattended_project_choice(&[7]).unwrap(), Some(7));
+    }
+
+    #[test]
+    fn no_projects_means_create_one() {
+        assert_eq!(unattended_project_choice(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn several_projects_is_the_one_case_yes_refuses_to_guess() {
+        let error = unattended_project_choice(&[7, 9]).unwrap_err().to_string();
+        assert!(
+            error.contains("--project"),
+            "should name the way out: {error}"
+        );
+        assert!(error.contains("#7"), "should list the candidates: {error}");
     }
 
     #[test]

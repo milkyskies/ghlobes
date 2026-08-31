@@ -319,7 +319,7 @@ const STATUS_OPTIONS: [(&str, &str, &str); 6] = [
     (
         "Needs Decision",
         "ORANGE",
-        "Agent stopped, waiting on a human answer",
+        "Waiting on a decision from you, whether an agent parked or you filed it undecided",
     ),
     (
         "In Review",

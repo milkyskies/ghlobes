@@ -50,9 +50,7 @@ pub fn run(top: usize) -> Result<()> {
             } else {
                 node.assignees.join(", ").dimmed().to_string()
             };
-            println!(
-                "  #{num:<5} {title:<40} blocks {count:>2}  {status}  {assignee}"
-            );
+            println!("  #{num:<5} {title:<40} blocks {count:>2}  {status}  {assignee}");
         }
     }
 

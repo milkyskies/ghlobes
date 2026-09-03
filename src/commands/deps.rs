@@ -16,12 +16,7 @@ pub fn run(number: u64, upstream: bool, downstream: bool) -> Result<()> {
     }
 
     let root = graph.nodes.get(&number).unwrap();
-    println!(
-        "{} #{} {}",
-        "Deps for".bold(),
-        number,
-        root.title.bold()
-    );
+    println!("{} #{} {}", "Deps for".bold(), number, root.title.bold());
     println!("{}", "─".repeat(70).dimmed());
 
     // Default: show both
@@ -103,7 +98,10 @@ fn render(
     let node = match graph.nodes.get(&number) {
         Some(n) => n,
         None => {
-            println!("{prefix}{connector}#{number} {}", "(closed/missing)".dimmed());
+            println!(
+                "{prefix}{connector}#{number} {}",
+                "(closed/missing)".dimmed()
+            );
             return;
         }
     };
@@ -163,12 +161,7 @@ fn count_transitive(
     visited.len()
 }
 
-fn walk(
-    graph: &IssueGraph,
-    number: u64,
-    upstream: bool,
-    visited: &mut HashSet<u64>,
-) {
+fn walk(graph: &IssueGraph, number: u64, upstream: bool, visited: &mut HashSet<u64>) {
     if !visited.insert(number) {
         return;
     }

@@ -55,11 +55,7 @@ pub fn run(number: u64) -> Result<()> {
         "CLOSED" => "Closed".green().to_string(),
         _ => root.state.clone(),
     };
-    let progress_pct = if total > 0 {
-        (done * 100) / total
-    } else {
-        0
-    };
+    let progress_pct = if total > 0 { (done * 100) / total } else { 0 };
     println!(
         "{} #{} {} {}",
         header_state,
@@ -125,9 +121,7 @@ fn render_node(
         }
     }
 
-    println!(
-        "{prefix}{connector}{icon} #{number} {title_styled}{tail}"
-    );
+    println!("{prefix}{connector}{icon} #{number} {title_styled}{tail}");
 
     let new_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
     let len = node.sub_issues.len();

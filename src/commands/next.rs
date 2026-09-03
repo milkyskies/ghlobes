@@ -114,9 +114,7 @@ pub fn run(opts: NextOpts) -> Result<()> {
         }
 
         // Anti-conflict: don't pick two issues sharing a near-future descendant
-        let conflicts = picked
-            .iter()
-            .any(|&p| graph.shares_descendant(num, p, 3));
+        let conflicts = picked.iter().any(|&p| graph.shares_descendant(num, p, 3));
         if conflicts {
             continue;
         }
@@ -225,10 +223,7 @@ pub fn run(opts: NextOpts) -> Result<()> {
                 for dep_num in unblocked.iter().take(5) {
                     if let Some(dep) = graph.nodes.get(dep_num) {
                         let dep_title = truncate(&dep.title, 40);
-                        println!(
-                            "              {} #{dep_num} {dep_title}",
-                            "↳".dimmed()
-                        );
+                        println!("              {} #{dep_num} {dep_title}", "↳".dimmed());
                     }
                 }
                 if unblocked.len() > 5 {

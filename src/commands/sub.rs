@@ -18,10 +18,13 @@ pub fn add(parent: u64, child: u64) -> Result<()> {
         }
     "#;
 
-    graphql(mutation, json!({
-        "issueId": parent_id,
-        "subIssueId": child_id,
-    }))?;
+    graphql(
+        mutation,
+        json!({
+            "issueId": parent_id,
+            "subIssueId": child_id,
+        }),
+    )?;
 
     println!("{} #{child} is now a sub-issue of #{parent}", "✓".green());
     Ok(())
@@ -40,10 +43,13 @@ pub fn remove(parent: u64, child: u64) -> Result<()> {
         }
     "#;
 
-    graphql(mutation, json!({
-        "issueId": parent_id,
-        "subIssueId": child_id,
-    }))?;
+    graphql(
+        mutation,
+        json!({
+            "issueId": parent_id,
+            "subIssueId": child_id,
+        }),
+    )?;
 
     println!("{} #{child} removed from #{parent}", "✓".green());
     Ok(())
@@ -65,20 +71,29 @@ pub fn list(parent: u64) -> Result<()> {
         }
     "#;
 
-    let data = graphql(query, json!({
-        "owner": config.owner,
-        "repo": config.repo,
-        "number": parent,
-    }))?;
+    let data = graphql(
+        query,
+        json!({
+            "owner": config.owner,
+            "repo": config.repo,
+            "number": parent,
+        }),
+    )?;
 
     let issue = &data["repository"]["issue"];
     if issue.is_null() {
         anyhow::bail!("Issue #{parent} not found");
     }
 
-    let subs = issue["subIssues"]["nodes"].as_array().cloned().unwrap_or_default();
+    let subs = issue["subIssues"]["nodes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
-    println!("#{parent} — {}", issue["title"].as_str().unwrap_or("?").bold());
+    println!(
+        "#{parent} — {}",
+        issue["title"].as_str().unwrap_or("?").bold()
+    );
 
     if subs.is_empty() {
         println!("  No sub-issues.");
@@ -86,13 +101,28 @@ pub fn list(parent: u64) -> Result<()> {
     }
 
     let total = subs.len();
-    let done = subs.iter().filter(|s| s["state"].as_str() == Some("CLOSED")).count();
-    println!("{}", format!("  Sub-issues ({done}/{total} done):").dimmed());
+    let done = subs
+        .iter()
+        .filter(|s| s["state"].as_str() == Some("CLOSED"))
+        .count();
+    println!(
+        "{}",
+        format!("  Sub-issues ({done}/{total} done):").dimmed()
+    );
 
     for sub in &subs {
         let state = sub["state"].as_str().unwrap_or("?");
-        let icon = if state == "OPEN" { "○".yellow() } else { "✓".green() };
-        println!("  {} #{} {}", icon, sub["number"], sub["title"].as_str().unwrap_or("?"));
+        let icon = if state == "OPEN" {
+            "○".yellow()
+        } else {
+            "✓".green()
+        };
+        println!(
+            "  {} #{} {}",
+            icon,
+            sub["number"],
+            sub["title"].as_str().unwrap_or("?")
+        );
     }
 
     Ok(())
@@ -107,14 +137,19 @@ fn get_issue_ids(config: &crate::config::Config, a: u64, b: u64) -> Result<(Stri
             }
         }
     "#;
-    let data = graphql(query, json!({
-        "owner": config.owner, "repo": config.repo, "a": a, "b": b
-    }))?;
+    let data = graphql(
+        query,
+        json!({
+            "owner": config.owner, "repo": config.repo, "a": a, "b": b
+        }),
+    )?;
 
-    let id_a = data["repository"]["a"]["id"].as_str()
+    let id_a = data["repository"]["a"]["id"]
+        .as_str()
         .with_context(|| format!("Issue #{a} not found"))?
         .to_string();
-    let id_b = data["repository"]["b"]["id"].as_str()
+    let id_b = data["repository"]["b"]["id"]
+        .as_str()
         .with_context(|| format!("Issue #{b} not found"))?
         .to_string();
 

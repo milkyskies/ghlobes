@@ -124,9 +124,7 @@ pub fn run(by_count: bool, top: usize, epic: Option<u64>, explain: bool) -> Resu
 
         let title_trunc = truncate(&node.title, 38);
 
-        println!(
-            "  {icon} #{num:<5} {title_trunc:<40} {pri:<4} {pts}{tag}{epic_note}",
-        );
+        println!("  {icon} #{num:<5} {title_trunc:<40} {pri:<4} {pts}{tag}{epic_note}",);
 
         if explain {
             // Show direct dependents (what this path step unblocks for the next)
@@ -144,7 +142,12 @@ pub fn run(by_count: bool, top: usize, epic: Option<u64>, explain: bool) -> Resu
                 let names: Vec<String> = dependents
                     .iter()
                     .take(3)
-                    .filter_map(|d| graph.nodes.get(d).map(|n| format!("#{d} {}", truncate(&n.title, 22))))
+                    .filter_map(|d| {
+                        graph
+                            .nodes
+                            .get(d)
+                            .map(|n| format!("#{d} {}", truncate(&n.title, 22)))
+                    })
                     .collect();
                 let extra = if dependents.len() > 3 {
                     format!(", +{} more", dependents.len() - 3)

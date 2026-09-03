@@ -32,15 +32,22 @@ pub fn run() -> Result<()> {
     let mut first = true;
 
     loop {
-        let data = graphql(query, json!({
-            "owner": config.owner,
-            "repo": config.repo,
-            "cursor": cursor,
-        }))?;
+        let data = graphql(
+            query,
+            json!({
+                "owner": config.owner,
+                "repo": config.repo,
+                "cursor": cursor,
+            }),
+        )?;
 
         if first {
-            total_open = data["repository"]["open"]["totalCount"].as_u64().unwrap_or(0);
-            total_closed = data["repository"]["closed"]["totalCount"].as_u64().unwrap_or(0);
+            total_open = data["repository"]["open"]["totalCount"]
+                .as_u64()
+                .unwrap_or(0);
+            total_closed = data["repository"]["closed"]["totalCount"]
+                .as_u64()
+                .unwrap_or(0);
             first = false;
         }
 
@@ -55,11 +62,15 @@ pub fn run() -> Result<()> {
             }
         }
 
-        let has_next = issues_node["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false);
+        let has_next = issues_node["pageInfo"]["hasNextPage"]
+            .as_bool()
+            .unwrap_or(false);
         if !has_next {
             break;
         }
-        cursor = issues_node["pageInfo"]["endCursor"].as_str().map(String::from);
+        cursor = issues_node["pageInfo"]["endCursor"]
+            .as_str()
+            .map(String::from);
     }
 
     let ready = total_open.saturating_sub(blocked_count);

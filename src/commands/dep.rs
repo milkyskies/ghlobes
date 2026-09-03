@@ -18,10 +18,13 @@ pub fn add(issue: u64, blocked_by: u64) -> Result<()> {
         }
     "#;
 
-    graphql(mutation, json!({
-        "issueId": issue_id,
-        "blockingIssueId": blocker_id,
-    }))?;
+    graphql(
+        mutation,
+        json!({
+            "issueId": issue_id,
+            "blockingIssueId": blocker_id,
+        }),
+    )?;
 
     println!("{} #{issue} is now blocked by #{blocked_by}", "✓".green());
 
@@ -40,12 +43,18 @@ pub fn remove(issue: u64, blocked_by: u64) -> Result<()> {
         }
     "#;
 
-    graphql(mutation, json!({
-        "issueId": issue_id,
-        "blockingIssueId": blocker_id,
-    }))?;
+    graphql(
+        mutation,
+        json!({
+            "issueId": issue_id,
+            "blockingIssueId": blocker_id,
+        }),
+    )?;
 
-    println!("{} Removed: #{issue} no longer blocked by #{blocked_by}", "✓".green());
+    println!(
+        "{} Removed: #{issue} no longer blocked by #{blocked_by}",
+        "✓".green()
+    );
     Ok(())
 }
 
@@ -68,11 +77,14 @@ pub fn list(issue: u64) -> Result<()> {
         }
     "#;
 
-    let data = graphql(query, json!({
-        "owner": config.owner,
-        "repo": config.repo,
-        "number": issue,
-    }))?;
+    let data = graphql(
+        query,
+        json!({
+            "owner": config.owner,
+            "repo": config.repo,
+            "number": issue,
+        }),
+    )?;
 
     let iss = &data["repository"]["issue"];
     if iss.is_null() {
@@ -81,8 +93,14 @@ pub fn list(issue: u64) -> Result<()> {
 
     println!("#{issue} — {}", iss["title"].as_str().unwrap_or("?").bold());
 
-    let blocked_by = iss["blockedBy"]["nodes"].as_array().cloned().unwrap_or_default();
-    let blocking = iss["blocking"]["nodes"].as_array().cloned().unwrap_or_default();
+    let blocked_by = iss["blockedBy"]["nodes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let blocking = iss["blocking"]["nodes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     if blocked_by.is_empty() && blocking.is_empty() {
         println!("  No dependencies.");
@@ -93,8 +111,17 @@ pub fn list(issue: u64) -> Result<()> {
         println!("{}", "  Blocked by:".yellow());
         for dep in &blocked_by {
             let state = dep["state"].as_str().unwrap_or("?");
-            let icon = if state == "OPEN" { "●".red() } else { "●".green() };
-            println!("    {} #{} {}", icon, dep["number"], dep["title"].as_str().unwrap_or("?"));
+            let icon = if state == "OPEN" {
+                "●".red()
+            } else {
+                "●".green()
+            };
+            println!(
+                "    {} #{} {}",
+                icon,
+                dep["number"],
+                dep["title"].as_str().unwrap_or("?")
+            );
         }
     }
 
@@ -102,8 +129,17 @@ pub fn list(issue: u64) -> Result<()> {
         println!("{}", "  Blocking:".dimmed());
         for dep in &blocking {
             let state = dep["state"].as_str().unwrap_or("?");
-            let icon = if state == "OPEN" { "●".yellow() } else { "●".green() };
-            println!("    {} #{} {}", icon, dep["number"], dep["title"].as_str().unwrap_or("?"));
+            let icon = if state == "OPEN" {
+                "●".yellow()
+            } else {
+                "●".green()
+            };
+            println!(
+                "    {} #{} {}",
+                icon,
+                dep["number"],
+                dep["title"].as_str().unwrap_or("?")
+            );
         }
     }
 
@@ -119,14 +155,19 @@ fn get_issue_ids(config: &crate::config::Config, a: u64, b: u64) -> Result<(Stri
             }
         }
     "#;
-    let data = graphql(query, json!({
-        "owner": config.owner, "repo": config.repo, "a": a, "b": b
-    }))?;
+    let data = graphql(
+        query,
+        json!({
+            "owner": config.owner, "repo": config.repo, "a": a, "b": b
+        }),
+    )?;
 
-    let id_a = data["repository"]["a"]["id"].as_str()
+    let id_a = data["repository"]["a"]["id"]
+        .as_str()
         .with_context(|| format!("Issue #{a} not found"))?
         .to_string();
-    let id_b = data["repository"]["b"]["id"].as_str()
+    let id_b = data["repository"]["b"]["id"]
+        .as_str()
         .with_context(|| format!("Issue #{b} not found"))?
         .to_string();
 

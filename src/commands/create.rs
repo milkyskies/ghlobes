@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::config::find_config;
 use crate::gh::{gh, graphql};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     title: Option<String>,
     body: Option<String>,
@@ -13,6 +14,8 @@ pub fn run(
     priority: Option<String>,
     status: Option<String>,
     points: Option<f64>,
+    milestone: Option<String>,
+    json: bool,
 ) -> Result<()> {
     let (config, _) = find_config()?;
 
@@ -53,10 +56,17 @@ pub fn run(
     let assignee_refs: Vec<&str> = assignee_args.iter().map(String::as_str).collect();
     args.extend(assignee_refs.iter().copied());
 
+    // gh resolves a milestone by title and fails loudly when it does not exist, which is what we
+    // want: a typo'd release should not quietly file the issue against nothing.
+    let milestone_str;
+    if let Some(ref m) = milestone {
+        milestone_str = m.clone();
+        args.extend(["--milestone", &milestone_str]);
+    }
+
     // gh issue create outputs the issue URL
     let out = gh(&args)?;
     let url = out.trim();
-    println!("{} Created {url}", "✓".green());
 
     // Extract issue number from URL (ends with /123)
     let issue_number: u64 = url
@@ -65,6 +75,15 @@ pub fn run(
         .and_then(|s| s.parse().ok())
         .context("Could not parse issue number from URL")?;
 
+    if !json {
+        println!("{} Created {url}", "✓".green());
+        // Everything else the command was asked to set gets a line, so a silent field is a
+        // field that did not happen rather than one that happened quietly.
+        if let Some(ref m) = milestone {
+            println!("{} Milestone → {m}", "✓".green());
+        }
+    }
+
     // Add to project and set fields
     add_to_project_and_set_fields(
         &config,
@@ -72,17 +91,29 @@ pub fn run(
         priority.as_deref(),
         status.as_deref(),
         points,
+        json,
     )?;
+
+    // A caller that is going to attach sub-issues or dependencies needs the number, and
+    // scraping it out of the human output is a race against the next create.
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "number": issue_number, "url": url })
+        );
+    }
 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn add_to_project_and_set_fields(
     config: &crate::config::Config,
     issue_number: u64,
     priority: Option<&str>,
     status: Option<&str>,
     points: Option<f64>,
+    json: bool,
 ) -> Result<()> {
     // Get issue node ID
     let issue_data = crate::gh::gh_json(&[
@@ -138,11 +169,13 @@ pub fn add_to_project_and_set_fields(
         .context("Failed to add issue to project")?
         .to_string();
 
-    println!(
-        "{} Added to project #{}",
-        "✓".green(),
-        config.project_number
-    );
+    if !json {
+        println!(
+            "{} Added to project #{}",
+            "✓".green(),
+            config.project_number
+        );
+    }
 
     // Set priority field
     if let Some(p) = priority {
@@ -153,6 +186,7 @@ pub fn add_to_project_and_set_fields(
             &config.priority_field_id,
             p,
             "Priority",
+            json,
         )?;
     }
 
@@ -165,13 +199,14 @@ pub fn add_to_project_and_set_fields(
             &config.status_field_id,
             s,
             "Status",
+            json,
         )?;
     }
 
     // Set points field
     if let Some(p) = points {
         if let Some(ref field_id) = config.points_field_id {
-            set_number_field(&project_id, &item_id, field_id, p)?;
+            set_number_field(&project_id, &item_id, field_id, p, json)?;
         } else {
             eprintln!("Warning: no Points field configured. Run `glb init` to set it up.");
         }
@@ -180,6 +215,7 @@ pub fn add_to_project_and_set_fields(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn set_single_select_field(
     config: &crate::config::Config,
     project_id: &str,
@@ -187,6 +223,7 @@ fn set_single_select_field(
     field_id: &str,
     value: &str,
     field_label: &str,
+    json: bool,
 ) -> Result<()> {
     // Resolve option ID for the value
     let fields_query = r#"
@@ -259,11 +296,19 @@ fn set_single_select_field(
         }),
     )?;
 
-    println!("{} Set {field_label} → {value}", "✓".green());
+    if !json {
+        println!("{} Set {field_label} → {value}", "✓".green());
+    }
     Ok(())
 }
 
-fn set_number_field(project_id: &str, item_id: &str, field_id: &str, value: f64) -> Result<()> {
+fn set_number_field(
+    project_id: &str,
+    item_id: &str,
+    field_id: &str,
+    value: f64,
+    json: bool,
+) -> Result<()> {
     let mutation = r#"
         mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $number: Float!) {
             updateProjectV2ItemFieldValue(input: {
@@ -287,6 +332,9 @@ fn set_number_field(project_id: &str, item_id: &str, field_id: &str, value: f64)
         }),
     )?;
 
-    println!("{} Set Points → {value}", "✓".green());
+    if !json {
+        println!("{} Set Points → {value}", "✓".green());
+    }
+
     Ok(())
 }

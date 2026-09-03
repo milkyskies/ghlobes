@@ -10,11 +10,16 @@ pub fn run(query: &str) -> Result<()> {
 
     let repo = format!("{}/{}", config.owner, config.repo);
     let results = gh_json(&[
-        "issue", "list",
-        "--repo", &repo,
-        "--search", query,
-        "--json", "number,title,state,labels",
-        "--limit", "30",
+        "issue",
+        "list",
+        "--repo",
+        &repo,
+        "--search",
+        query,
+        "--json",
+        "number,title,state,labels",
+        "--limit",
+        "30",
     ])?;
 
     let empty = vec![];
@@ -25,7 +30,11 @@ pub fn run(query: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!("{} results for \"{}\":", issues.len().to_string().green().bold(), query);
+    println!(
+        "{} results for \"{}\":",
+        issues.len().to_string().green().bold(),
+        query
+    );
     println!("{}", "─".repeat(60).dimmed());
 
     for issue in issues {

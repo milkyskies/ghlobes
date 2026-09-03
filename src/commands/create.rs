@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::config::find_config;
 use crate::gh::{gh, graphql};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     title: Option<String>,
     body: Option<String>,
@@ -13,6 +14,7 @@ pub fn run(
     priority: Option<String>,
     status: Option<String>,
     points: Option<f64>,
+    milestone: Option<String>,
 ) -> Result<()> {
     let (config, _) = find_config()?;
 
@@ -52,6 +54,14 @@ pub fn run(
         .collect();
     let assignee_refs: Vec<&str> = assignee_args.iter().map(String::as_str).collect();
     args.extend(assignee_refs.iter().copied());
+
+    // gh resolves a milestone by title and fails loudly when it does not exist, which is what we
+    // want: a typo'd release should not quietly file the issue against nothing.
+    let milestone_str;
+    if let Some(ref m) = milestone {
+        milestone_str = m.clone();
+        args.extend(["--milestone", &milestone_str]);
+    }
 
     // gh issue create outputs the issue URL
     let out = gh(&args)?;

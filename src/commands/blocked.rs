@@ -30,11 +30,14 @@ pub fn run() -> Result<()> {
     let mut blocked = Vec::new();
 
     loop {
-        let data = graphql(query, json!({
-            "owner": config.owner,
-            "repo": config.repo,
-            "cursor": cursor,
-        }))?;
+        let data = graphql(
+            query,
+            json!({
+                "owner": config.owner,
+                "repo": config.repo,
+                "cursor": cursor,
+            }),
+        )?;
 
         let issues_node = &data["repository"]["issues"];
         let nodes = issues_node["nodes"].as_array().cloned().unwrap_or_default();
@@ -58,11 +61,15 @@ pub fn run() -> Result<()> {
             }
         }
 
-        let has_next = issues_node["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false);
+        let has_next = issues_node["pageInfo"]["hasNextPage"]
+            .as_bool()
+            .unwrap_or(false);
         if !has_next {
             break;
         }
-        cursor = issues_node["pageInfo"]["endCursor"].as_str().map(String::from);
+        cursor = issues_node["pageInfo"]["endCursor"]
+            .as_str()
+            .map(String::from);
     }
 
     if blocked.is_empty() {

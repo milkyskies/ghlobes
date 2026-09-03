@@ -31,7 +31,8 @@ pub fn graphql(query: &str, variables: Value) -> Result<Value> {
         anyhow::bail!("gh api graphql failed: {stderr}{}", scope_hint(&stderr));
     }
 
-    let json: Value = serde_json::from_slice(&output.stdout).context("Failed to parse gh api graphql output")?;
+    let json: Value =
+        serde_json::from_slice(&output.stdout).context("Failed to parse gh api graphql output")?;
 
     if let Some(errors) = json.get("errors") {
         let msg = errors.to_string();

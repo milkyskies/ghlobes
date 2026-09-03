@@ -77,6 +77,7 @@ enum Command {
   glb create -t \"Add login form\" -p P1 -s Todo --points 3
   glb create -t \"Bug: tests crash\" -p P0 -l bug --points 1
   glb create -t \"Auth epic\"         Then use `glb sub add` to attach children
+  glb create -t \"Jars\" -m 0.1.0     File it against a release milestone
 
 NOTES:
   - Em and en dashes (— –) are rejected. Use a hyphen '-' or colon ':'.
@@ -97,6 +98,9 @@ NOTES:
         /// Effort estimate (use Fibonacci: 1, 2, 3, 5, 8, 13)
         #[arg(long)]
         points: Option<f64>,
+        /// Milestone title, e.g. a release. Must already exist on the repo
+        #[arg(long, short = 'm')]
+        milestone: Option<String>,
         /// Add the `autopilot` label, marking the issue claimable by an autonomous agent
         #[arg(long)]
         autopilot: bool,
@@ -108,7 +112,9 @@ NOTES:
   glb update 44 -p P1               Set priority
   glb update 44 -s Todo             Set status
   glb update 44 --points 5          Set points (Fibonacci: 1,2,3,5,8,13)
-  glb update 44 -a alice            Reassign")]
+  glb update 44 -a alice            Reassign
+  glb update 44 -m 0.1.0            Put it in a release milestone
+  glb update 44 -m \"\"              Take it out of its milestone")]
     Update {
         number: u64,
         #[arg(long, short = 't')]
@@ -127,6 +133,9 @@ NOTES:
         /// Effort estimate (use Fibonacci: 1, 2, 3, 5, 8, 13)
         #[arg(long)]
         points: Option<f64>,
+        /// Milestone title, e.g. a release. Must already exist on the repo
+        #[arg(long, short = 'm')]
+        milestone: Option<String>,
     },
 
     /// Close an issue
@@ -413,12 +422,15 @@ fn main() -> Result<()> {
             priority,
             status,
             points,
+            milestone,
             autopilot,
         } => {
             if autopilot && !label.iter().any(|l| l == eligibility::AUTOPILOT_LABEL) {
                 label.push(eligibility::AUTOPILOT_LABEL.to_string());
             }
-            commands::create::run(title, body, label, assignee, priority, status, points)?;
+            commands::create::run(
+                title, body, label, assignee, priority, status, points, milestone,
+            )?;
         }
         Command::Update {
             number,
@@ -429,9 +441,10 @@ fn main() -> Result<()> {
             assignee,
             claim,
             points,
+            milestone,
         } => {
             commands::update::run(
-                number, title, body, status, priority, assignee, claim, points,
+                number, title, body, status, priority, assignee, claim, points, milestone,
             )?;
         }
         Command::Close { number, comment } => {

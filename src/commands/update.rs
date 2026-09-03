@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::config::find_config;
 use crate::gh::graphql;
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     number: u64,
     title: Option<String>,
@@ -14,6 +15,7 @@ pub fn run(
     assignee: Option<String>,
     claim: bool,
     points: Option<f64>,
+    milestone: Option<String>,
 ) -> Result<()> {
     let (config, _) = find_config()?;
     // --claim is shorthand for --status "In Progress"
@@ -29,9 +31,10 @@ pub fn run(
         && priority.is_none()
         && assignee.is_none()
         && points.is_none()
+        && milestone.is_none()
     {
         anyhow::bail!(
-            "Specify at least one of --title, --body, --status, --priority, --assignee, --points, or --claim"
+            "Specify at least one of --title, --body, --status, --priority, --assignee, --points, --milestone, or --claim"
         );
     }
 
@@ -61,7 +64,22 @@ pub fn run(
         println!("{} Body updated", "✓".green());
     }
 
-    // If only title/body was updated, skip project field updates
+    // An empty --milestone is how you take an issue out of one, which is what gh's own
+    // --remove-milestone does. Passing "" to --milestone would be a lookup for a titleless
+    // milestone and fail.
+    if let Some(ref m) = milestone {
+        let repo = format!("{}/{}", config.owner, config.repo);
+        let n = number.to_string();
+        if m.is_empty() {
+            crate::gh::gh(&["issue", "edit", &n, "--repo", &repo, "--remove-milestone"])?;
+            println!("{} Milestone cleared", "✓".green());
+        } else {
+            crate::gh::gh(&["issue", "edit", &n, "--repo", &repo, "--milestone", m])?;
+            println!("{} Milestone → {m}", "✓".green());
+        }
+    }
+
+    // If only title/body/milestone was updated, skip project field updates
     if status.is_none() && priority.is_none() && assignee.is_none() && points.is_none() {
         return Ok(());
     }

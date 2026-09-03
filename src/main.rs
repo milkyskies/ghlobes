@@ -78,6 +78,7 @@ enum Command {
   glb create -t \"Bug: tests crash\" -p P0 -l bug --points 1
   glb create -t \"Auth epic\"         Then use `glb sub add` to attach children
   glb create -t \"Jars\" -m 0.1.0     File it against a release milestone
+  glb create -t \"Jars\" --json       Print just {\"number\":N,\"url\":...} for scripting
 
 NOTES:
   - Em and en dashes (— –) are rejected. Use a hyphen '-' or colon ':'.
@@ -101,6 +102,9 @@ NOTES:
         /// Milestone title, e.g. a release. Must already exist on the repo
         #[arg(long, short = 'm')]
         milestone: Option<String>,
+        /// Print {"number":N,"url":"..."} and nothing else, for scripting
+        #[arg(long)]
+        json: bool,
         /// Add the `autopilot` label, marking the issue claimable by an autonomous agent
         #[arg(long)]
         autopilot: bool,
@@ -423,13 +427,14 @@ fn main() -> Result<()> {
             status,
             points,
             milestone,
+            json,
             autopilot,
         } => {
             if autopilot && !label.iter().any(|l| l == eligibility::AUTOPILOT_LABEL) {
                 label.push(eligibility::AUTOPILOT_LABEL.to_string());
             }
             commands::create::run(
-                title, body, label, assignee, priority, status, points, milestone,
+                title, body, label, assignee, priority, status, points, milestone, json,
             )?;
         }
         Command::Update {
